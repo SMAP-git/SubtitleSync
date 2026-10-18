@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Container version="2">
+  <Name>SubtitleSync</Name>
+  <Repository>subtitle-sync:1.0.0</Repository>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>bash</Shell>
+  <Privileged>false</Privileged>
+  <Overview>Local subtitle synchronization and Whisper.cpp speech to text in a browser desktop. CPU, AMD/Intel GPU and integrated APU via Vulkan, NVIDIA via CUDA or Vulkan. Import the locally built image before adding this template. Host GPU drivers are required. For AMD/Intel add --device=/dev/dri:/dev/dri to Extra Parameters. For NVIDIA install the Unraid NVIDIA Driver plugin, add --gpus=all to Extra Parameters, and select the GPU UUID in NVIDIA_VISIBLE_DEVICES. Retain --shm-size=1g. Do not expose the Web UI to the Internet.</Overview>
+  <Category>MediaApp:Video</Category>
+  <WebUI>http://[IP]:[PORT:5800]/</WebUI>
+  <ExtraParams>--shm-size=1g</ExtraParams>
+  <PostArgs/>
+  <Config Name="Web UI" Target="5800" Default="5800" Mode="tcp" Description="Browser desktop. Trusted LAN only; use an authenticated TLS reverse proxy for remote access." Type="Port" Display="always" Required="true" Mask="false">5800</Config>
+  <Config Name="Settings and models" Target="/config" Default="/mnt/user/appdata/subtitle-sync" Mode="rw" Description="Persistent settings, models and downloaded GPU/speech runtimes." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/subtitle-sync</Config>
+  <Config Name="Media and subtitles" Target="/data" Default="/mnt/user/media" Mode="rw" Description="Video/subtitle input and generated output. Only expose the folders the app needs." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/media</Config>
+  <Config Name="NVIDIA devices" Target="NVIDIA_VISIBLE_DEVICES" Default="all" Description="GPU UUID or all. Requires NVIDIA Driver plugin and --gpus=all in Extra Parameters." Type="Variable" Display="advanced" Required="false" Mask="false">all</Config>
+  <Config Name="NVIDIA capabilities" Target="NVIDIA_DRIVER_CAPABILITIES" Default="compute,utility,graphics" Description="CUDA, nvidia-smi and Vulkan userspace driver injection." Type="Variable" Display="advanced" Required="false" Mask="false">compute,utility,graphics</Config>
+  <Config Name="User ID" Target="USER_ID" Default="99" Description="Unraid nobody; change to match media ownership if needed." Type="Variable" Display="advanced" Required="true" Mask="false">99</Config>
+  <Config Name="Group ID" Target="GROUP_ID" Default="100" Description="Unraid users group." Type="Variable" Display="advanced" Required="true" Mask="false">100</Config>
+  <Config Name="Supplementary groups" Target="SUP_GROUP_IDS" Default="" Description="Optional comma-separated additional numeric group IDs. Standard non-root DRI device groups are detected by the desktop base." Type="Variable" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="Time zone" Target="TZ" Default="Etc/UTC" Description="For example Europe/Lisbon." Type="Variable" Display="advanced" Required="true" Mask="false">Etc/UTC</Config>
+  <Config Name="Desktop password" Target="VNC_PASSWORD" Default="" Description="Optional desktop password (maximum 8 characters); not a replacement for TLS and network isolation." Type="Variable" Display="always" Required="false" Mask="true"/>
+</Container>

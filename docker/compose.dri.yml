@@ -1,0 +1,4 @@
+services:
+  subtitle-sync:
+    devices:
+      - /dev/dri:/dev/dri

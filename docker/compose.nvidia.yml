@@ -1,0 +1,3 @@
+services:
+  subtitle-sync:
+    gpus: all

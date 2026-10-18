@@ -1,0 +1,18 @@
+services:
+  subtitle-sync:
+    image: subtitle-sync:1.0.0
+    build:
+      context: .
+      platforms:
+        - linux/amd64
+    ports:
+      - "5800:5800"
+    environment:
+      USER_ID: "${USER_ID:-99}"
+      GROUP_ID: "${GROUP_ID:-100}"
+      TZ: "${TZ:-Etc/UTC}"
+    volumes:
+      - "${SUBTITLE_SYNC_CONFIG:-./subtitle-sync-config}:/config"
+      - "${SUBTITLE_SYNC_MEDIA:-./subtitle-sync-media}:/data"
+    shm_size: "1gb"
+    restart: unless-stopped

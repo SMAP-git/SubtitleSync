@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Container version="2">
+  <Name>SubtitleSync-CPU</Name>
+  <Repository>subtitle-sync:1.0.0-cpu</Repository>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>bash</Shell>
+  <Privileged>false</Privileged>
+  <Overview>Subtitle Sync CPU-only browser desktop, including Whisper speech recognition, FFmpeg and MKVToolNix. No GPU setup/downloads or passthrough. Use the full image for GPU support. Load the local CPU image before creating the container. Trusted LAN only.</Overview>
+  <Category>MediaApp:Video</Category>
+  <WebUI>http://[IP]:[PORT:5800]/</WebUI>
+  <ExtraParams>--shm-size=1g</ExtraParams>
+  <PostArgs/>
+  <Config Name="Web UI" Target="5800" Default="5800" Mode="tcp" Description="Browser desktop; trusted LAN only." Type="Port" Display="always" Required="true" Mask="false">5800</Config>
+  <Config Name="Settings and models" Target="/config" Default="/mnt/user/appdata/subtitle-sync" Mode="rw" Description="Persistent settings and CPU models. Do not share with another running instance." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/subtitle-sync</Config>
+  <Config Name="Media and subtitles" Target="/data" Default="/mnt/user/media" Mode="rw" Description="Input media and subtitle output." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/media</Config>
+  <Config Name="User ID" Target="USER_ID" Default="99" Description="Unraid nobody." Type="Variable" Display="advanced" Required="true" Mask="false">99</Config>
+  <Config Name="Group ID" Target="GROUP_ID" Default="100" Description="Unraid users." Type="Variable" Display="advanced" Required="true" Mask="false">100</Config>
+  <Config Name="Desktop password" Target="VNC_PASSWORD" Default="" Description="Optional desktop password, up to eight characters; not encryption." Type="Variable" Display="always" Required="false" Mask="true"/>
+</Container>
