@@ -1,4 +1,5 @@
 import json
+import errno
 import os
 import queue
 import stat
@@ -29,6 +30,40 @@ def fixture(cues):
 
 
 class SyncOutputTests(unittest.TestCase):
+    def test_network_share_without_hardlinks_publishes_exclusively(self):
+        with patch.object(sync_subtitles.os, "link", side_effect=OSError(errno.EPERM, "Operation not permitted")):
+            sync_subtitles.publish_new_file(self.source, self.output)
+            self.assertEqual(self.output.read_bytes(), self.source.read_bytes())
+            with self.assertRaises(FileExistsError):
+                sync_subtitles.publish_new_file(self.source, self.output)
+        self.assertEqual(self.output.read_bytes(), self.source.read_bytes())
+
+    def test_network_copy_failure_removes_partial_output(self):
+        def fail_copy(source, destination):
+            destination.write(b"partial")
+            raise OSError("Network disconnected")
+
+        with (
+            patch.object(sync_subtitles.os, "link", side_effect=OSError(errno.EOPNOTSUPP, "Not supported")),
+            patch.object(sync_subtitles.shutil, "copyfileobj", side_effect=fail_copy),
+        ):
+            with self.assertRaisesRegex(OSError, "Network disconnected"):
+                sync_subtitles.publish_new_file(self.source, self.output)
+        self.assertFalse(self.output.exists())
+        self.assertTrue(self.source.exists())
+
+    def test_existing_network_symlink_and_permission_errors_are_not_overwritten(self):
+        self.output.symlink_to(self.source)
+        with patch.object(sync_subtitles.os, "link", side_effect=OSError(errno.EPERM, "Not supported")):
+            with self.assertRaises(FileExistsError):
+                sync_subtitles.publish_new_file(self.source, self.output)
+        self.assertTrue(self.output.is_symlink())
+        self.output.unlink()
+        with patch.object(sync_subtitles.os, "link", side_effect=PermissionError(errno.EACCES, "Denied")):
+            with self.assertRaises(PermissionError):
+                sync_subtitles.publish_new_file(self.source, self.output)
+        self.assertFalse(self.output.exists())
+
     def setUp(self):
         self.gui = load_gui()
         self.addCleanup(self.gui._test_settings_directory.cleanup)
@@ -100,6 +135,90 @@ class SyncOutputTests(unittest.TestCase):
 
 
 class ContextMatchingTests(unittest.TestCase):
+    def test_automatic_initial_pair_ignores_credits_and_finds_consistent_nonfirst_dialogue(self):
+        source = [
+            alignment.Cue(1000, 3000, "Downloaded From www.example.org"),
+            *[alignment.Cue(20000 * i + 10000, 20000 * i + 12000, f"Distinct source dialogue {i}") for i in range(5)],
+        ]
+        reference = [
+            alignment.Cue(1000, 3000, "Unrelated introduction"),
+            *[alignment.Cue(20000 * i + 17000, 20000 * i + 19000, f"Reference dialogue translation {i}") for i in range(5)],
+        ]
+        vectors = {"Unrelated introduction": np.eye(6)[5]}
+        for i in range(5):
+            vectors[source[i + 1].text] = vectors[reference[i + 1].text] = np.eye(6)[i]
+        left, right = alignment._automatic_initial_pair(source, reference, vectors, 70, lambda _: None)
+        self.assertGreater(left, 1)
+        self.assertEqual(left, right)
+        self.assertEqual(reference[right - 1].start_ms - source[left - 1].start_ms, 7000)
+
+    def test_automatic_initial_pair_rejects_ambiguous_and_insufficient_matches(self):
+        cues = [alignment.Cue(i * 20000, i * 20000 + 1000, f"Repeated dialogue wording {i}") for i in range(4)]
+        vectors = {cue.text: np.array([1., 0.]) for cue in cues}
+        for source, reference in ((cues, cues), (cues[:2], cues)):
+            with self.assertRaisesRegex(ValueError, "Select matching cues manually"):
+                alignment._automatic_initial_pair(source, reference, vectors, 70, lambda _: None)
+
+    def test_automatic_initial_pair_rejects_competing_offset_groups(self):
+        source = [alignment.Cue(i * 20000, i * 20000 + 1000, f"Source dialogue content {i}") for i in range(6)]
+        reference = [
+            alignment.Cue(cue.start_ms + (5000 if i < 3 else 25000), cue.end_ms + (5000 if i < 3 else 25000),
+                          f"Reference dialogue content {i}")
+            for i, cue in enumerate(source)
+        ]
+        vectors = {}
+        for i in range(6):
+            vectors[source[i].text] = vectors[reference[i].text] = np.eye(6)[i]
+        with self.assertRaisesRegex(ValueError, "Select matching cues manually"):
+            alignment._automatic_initial_pair(source, reference, vectors, 70, lambda _: None)
+
+    def test_analysis_automatically_selects_anchor_using_existing_embeddings_once(self):
+        source = [alignment.Cue(i * 60000 + 10000, i * 60000 + 12000, f"Unique dialogue phrase {i}") for i in range(5)]
+        reference = [replace(cue, start_ms=cue.start_ms + 5000, end_ms=cue.end_ms + 5000) for cue in source]
+        vectors = {cue.text: np.eye(5)[i] for i, cue in enumerate(source)}
+        model = Mock()
+        model.embed.side_effect = lambda texts, **kwargs: [vectors[text] for text in texts]
+        with patch.object(alignment, "_load_embedding_model", return_value=model):
+            anchors, diagnostics = alignment.analyze_subtitles(source, reference, 0, automatic_initial=True)
+        self.assertEqual(anchors, [(i, 5.) for i in range(1, 6)])
+        self.assertEqual(diagnostics["automatic_initial"], 1)
+        self.assertEqual(diagnostics["reference_anchor"], diagnostics["source_anchor"])
+        model.embed.assert_called_once()
+
+    def test_out_of_order_credit_does_not_block_dialogue_alignment(self):
+        source = [
+            alignment.Cue(10000, 11000, "First dialogue"),
+            alignment.Cue(70000, 71000, "Second dialogue"),
+            alignment.Cue(3000, 5000, "Downloaded From www.example.org"),
+        ]
+        reference = [
+            replace(cue, start_ms=cue.start_ms + 2000, end_ms=cue.end_ms + 2000)
+            for cue in source[:2]
+        ]
+        model = Mock()
+        model.embed.side_effect = lambda texts, **kwargs: [
+            np.array([1., 0.]) if "First" in text else np.array([0., 1.]) for text in texts
+        ]
+        messages = []
+        with patch.object(alignment, "_load_embedding_model", return_value=model):
+            anchors, diagnostics = alignment.analyze_subtitles(
+                source, reference, 12000, source_anchor=1, reference_anchor=1, progress=messages.append,
+            )
+        synced, count = sync_subtitles.sync_srt(fixture(source), anchors)
+        self.assertEqual(count, 3)
+        self.assertEqual([cue.text for cue in alignment.parse_srt(synced)], [cue.text for cue in source])
+        self.assertEqual(anchors, [(1, 2.), (2, 2.)])
+        self.assertTrue(any("Out-of-order credit" in message for message in messages))
+        self.assertEqual(diagnostics["total_cues"], 3)
+
+    def test_out_of_order_dialogue_is_still_rejected(self):
+        cues = [
+            alignment.Cue(10000, 11000, "First dialogue"),
+            alignment.Cue(3000, 4000, "Misplaced dialogue"),
+        ]
+        with self.assertRaisesRegex(ValueError, "dialogue cues must be in chronological order"):
+            alignment.analyze_subtitles(cues, cues, 10000)
+
     def test_long_single_whisper_cues_are_usable_without_expanding_multi_cue_windows(self):
         cues = [
             alignment.Cue(2000, 20000, "A complete sentence from a speech recognition segment."),
@@ -300,7 +419,7 @@ class ManualSyncGuiTests(unittest.TestCase):
         self.assertEqual(self.app.sync_selection.source_number, 2)
         self.assertEqual(self.app.sync_selection.reference_number, 3)
         self.assertEqual(self.app.initial_time.get(), self.gui.format_time(self.reference[2].start_ms))
-        self.app.english_path.set("a-different-reference.srt")
+        self.app.reference_path.set("a-different-reference.srt")
         self.assertIsNone(self.app.sync_selection)
         self.assertEqual(self.app.initial_time.get(), "")
 
@@ -308,7 +427,7 @@ class ManualSyncGuiTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             source = Path(folder) / "source.srt"
             source.write_text(fixture(self.source), encoding="utf-8")
-            self.app.portuguese_path.set(str(source))
+            self.app.source_path.set(str(source))
             self.app.output_path.set(str(Path(folder) / "output.srt"))
             with (
                 patch.object(self.gui.messagebox, "showwarning") as warning,
@@ -376,8 +495,8 @@ class ManualSyncGuiTests(unittest.TestCase):
             reference = Path(folder) / "reference.srt"
             source.write_text(fixture(self.source), encoding="utf-8")
             reference.write_text(fixture(self.reference), encoding="utf-8")
-            self.app.portuguese_path.set(str(source))
-            self.app.english_path.set(str(reference))
+            self.app.source_path.set(str(source))
+            self.app.reference_path.set(str(reference))
             with patch.object(self.app, "_show_pair_picker") as show:
                 self.app._open_initial_sync()
                 deadline = time.monotonic() + 3
@@ -394,7 +513,7 @@ class ManualSyncGuiTests(unittest.TestCase):
             video = Path(folder) / "video.mkv"
             source.write_text(fixture(self.source), encoding="utf-8")
             video.write_bytes(b"mock video")
-            self.app.portuguese_path.set(str(source))
+            self.app.source_path.set(str(source))
             self.app.video_path.set(str(video))
             with (
                 patch.object(alignment, "list_subtitle_tracks", return_value=[
@@ -426,8 +545,8 @@ class ManualSyncGuiTests(unittest.TestCase):
             reference = Path(folder) / "reference.srt"
             source.write_text(fixture(self.source), encoding="utf-8")
             reference.write_text(fixture(self.reference), encoding="utf-8")
-            self.app.portuguese_path.set(str(source))
-            self.app.english_path.set(str(reference))
+            self.app.source_path.set(str(source))
+            self.app.reference_path.set(str(reference))
             self.app.output_path.set(str(reference))
             self.app.sync_selection = manual_sync.SyncSelection(
                 self.source, self.reference, 2, 2,

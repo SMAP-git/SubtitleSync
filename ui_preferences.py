@@ -14,7 +14,7 @@ from tkinter import ttk
 
 from ui_translations import LANGUAGES, translate
 
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.1.0"
 THEMES = ("system", "light", "dark")
 
 
@@ -191,6 +191,8 @@ class InterfacePreferences:
     def apply_window(self, window: tk.Misc) -> None:
         """Translate static captions only; never touch paths, subtitle text or logs."""
         if isinstance(window, (tk.Tk, tk.Toplevel)):
+            if isinstance(window, tk.Toplevel):
+                window.configure(background=self.root.cget("background"))
             if not hasattr(window, "_original_title"):
                 window._original_title = window.title()
             window.title(self.tr(window._original_title))

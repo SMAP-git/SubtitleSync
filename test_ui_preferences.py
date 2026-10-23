@@ -36,6 +36,10 @@ class PreferencesTests(unittest.TestCase):
             text = translations.instructions(language)
             self.assertIn(translations.translate("Analyze and synchronize", language), text)
             self.assertIn(translations.translate("Save synchronized SRT", language), text)
+            self.assertIn(translations.translate(
+                "Example 3: Synchronize existing subtitles using the audio", language,
+            ), text)
+            self.assertIn(translations.translate("Synchronize to audio", language), text)
 
     def test_settings_roundtrip_and_missing_file_defaults(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -75,6 +79,90 @@ class PreferencesTests(unittest.TestCase):
             self.assertEqual(preferences.settings_path(), Path("/roaming/SubtitleSync/settings.json"))
 
 
+class ReferenceDiscoveryTests(unittest.TestCase):
+    def test_discovers_only_matching_title_language_variants(self):
+        gui = load_gui()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "Episode.pt-pt.srt"
+            names = (
+                source.name, "Episode.en.srt", "Episode.English.srt", "Episode.srt",
+                "Episode.pt-pt.synced.srt", "Episode.fr.audio-synced.srt",
+                "Other.en.srt", "Episode.1080p.en.srt", "Episode.eng.SRT",
+            )
+            for name in names:
+                (root / name).touch()
+            output = root / "Episode.pt-pt.synced.srt"
+            self.assertEqual({path.name for path in gui.reference_candidates(source, output)}, {
+                "Episode.en.srt", "Episode.English.srt", "Episode.srt", "Episode.eng.SRT",
+            })
+            self.assertEqual(gui.subtitle_name_parts(root / "Episode.Portuguese.srt")[0], "episode")
+            self.assertEqual(gui.subtitle_name_parts(root / "Episode.en_US.srt"), ("episode", "en-us"))
+            self.assertEqual(gui.subtitle_name_parts(root / "Episode.S03E01.srt"), ("episode.s03e01", ""))
+
+    def test_excludes_source_alias_and_current_output(self):
+        gui = load_gui()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, output = root / "Episode.pt.srt", root / "Episode.en.srt"
+            source.touch()
+            output.touch()
+            (root / "Episode.fr.srt").symlink_to(source)
+            self.assertEqual(gui.reference_candidates(source, output), [])
+
+
+class DesktopIdentityTests(unittest.TestCase):
+    def test_linux_desktop_entry_has_app_name_icon_and_window_class(self):
+        gui = load_gui()
+        exists = Path.exists
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.object(gui.sys, "platform", "linux"),
+            patch.dict(os.environ, {"XDG_DATA_HOME": directory}),
+            patch.object(Path, "exists", lambda path: False if str(path) in (
+                "/.dockerenv", "/run/.containerenv",
+            ) else exists(path)),
+        ):
+            gui.configure_desktop_identity()
+            entry = Path(directory) / "applications/SubSync.desktop"
+            content = entry.read_text()
+            self.assertIn("Name=SubSync\n", content)
+            self.assertIn("StartupWMClass=Subsync\n", content)
+            self.assertIn(f"Icon={Path(gui.__file__).parent / 'subtitle_sync_icon.png'}\n", content)
+            self.assertIn("Exec=/bin/bash ", content)
+            previous = entry.stat().st_mtime_ns
+            gui.configure_desktop_identity()
+            self.assertEqual(entry.stat().st_mtime_ns, previous)
+
+    def test_windows_app_identity_is_set_before_window_creation(self):
+        import ctypes
+
+        gui = load_gui()
+        shell = Mock()
+        shell.shell32.SetCurrentProcessExplicitAppUserModelID.return_value = 0
+        with (
+            patch.object(gui.sys, "platform", "win32"),
+            patch.object(ctypes, "windll", shell, create=True),
+        ):
+            gui.configure_desktop_identity()
+            shell.shell32.SetCurrentProcessExplicitAppUserModelID.assert_called_once_with("SubSync.Desktop")
+            shell.shell32.SetCurrentProcessExplicitAppUserModelID.return_value = -1
+            with self.assertRaisesRegex(OSError, "taskbar identity"):
+                gui.configure_desktop_identity()
+
+    def test_main_creates_subsync_window_class(self):
+        gui = load_gui()
+        with (
+            patch.object(gui, "configure_desktop_identity") as configure,
+            patch.object(gui.tk, "Tk") as root,
+            patch.object(gui, "SubtitleSyncApp"),
+        ):
+            gui.main()
+        configure.assert_called_once()
+        root.assert_called_once_with(className="SubSync")
+        root.return_value.mainloop.assert_called_once()
+
+
 @unittest.skipUnless(os.environ.get("DISPLAY") or os.name == "nt", "Tk display required")
 class InterfaceTests(unittest.TestCase):
     def setUp(self):
@@ -107,7 +195,841 @@ class InterfaceTests(unittest.TestCase):
         banner = self.app.gear_button.master
         right = [widget for widget in banner.winfo_children() if widget.pack_info().get("side") == "right"]
         self.assertEqual(
-            right, [self.app.version_badge, self.app.gear_button, self.app.cancel_sync_button, self.app.sync_button, self.app.speech_button],
+            right, [self.app.version_badge, self.app.gear_button, self.app.cancel_sync_button,
+                    self.app.sync_button, self.app.speech_button, self.app.audio_sync_button],
+        )
+
+    def test_desktop_window_name_and_icon_are_subsync(self):
+        self.assertEqual(self.root.title(), "SubSync")
+        self.assertEqual(self.root.iconname(), "SubSync")
+        self.assertTrue(str(self.root.tk.call("tk", "appname")).startswith("SubSync"))
+        self.assertGreater(self.app._window_icon.width(), 0)
+
+    def test_file_controls_use_requested_two_row_layout(self):
+        groups = (
+            (self.app.video_file_group, 0, 0),
+            (self.app.reference_file_group, 0, 1),
+            (self.app.source_file_group, 1, 0),
+            (self.app.output_file_group, 1, 1),
+        )
+        for widget, row, column in groups:
+            with self.subTest(widget=widget):
+                self.assertEqual(widget.grid_info()["row"], row)
+                self.assertEqual(widget.grid_info()["column"], column)
+                self.assertIs(widget.master, self.app.video_file_group.master)
+        self.assertFalse(hasattr(self.app, "portuguese_path"))
+        self.assertFalse(hasattr(self.app, "english_path"))
+        with (
+            patch.object(self.gui.filedialog, "askopenfilename", return_value="/source.srt"),
+            patch.object(self.gui.subtitle_alignment, "read_srt", return_value=[Cue(0, 1000, "Test")]),
+            patch.object(self.gui, "reference_candidates", return_value=[]),
+        ):
+            self.app._choose_source()
+        self.assertEqual(self.app.source_path.get(), "/source.srt")
+        with (
+            patch.object(self.gui.filedialog, "askopenfilename", return_value="/reference.srt"),
+            patch.object(self.gui, "reference_candidates", return_value=[]),
+        ):
+            self.app._choose_reference()
+        self.assertEqual(self.app.reference_path.get(), "/reference.srt")
+
+    def test_hearing_filter_is_right_of_initial_sync_point(self):
+        anchor = self.app.pair_button.master
+        options = anchor.master
+        hearing = next(
+            widget for widget in options.winfo_children()
+            if isinstance(widget, ttk.LabelFrame) and widget["text"] == "Hearing-impaired filter"
+        )
+        self.assertEqual(hearing.grid_info()["row"], anchor.grid_info()["row"])
+        self.assertEqual(hearing.grid_info()["column"], 3)
+        self.assertEqual(anchor.grid_info()["column"], 2)
+        self.assertEqual(self.app.folder_group.grid_info()["column"], 0)
+        self.assertEqual(self.app.audio_folder_group.grid_info()["column"], 1)
+        self.root.deiconify()
+        self.root.update()
+        self.assertLessEqual(anchor.winfo_rootx() + anchor.winfo_width(), hearing.winfo_rootx())
+        scale = next(widget for widget in hearing.winfo_children() if isinstance(widget, ttk.Scale))
+        scale.set(42)
+        self.assertEqual(self.app.hearing_impaired_strictness.get(), 42)
+        self.assertEqual(self.app.hearing_impaired_value.get(), "42 / 100")
+
+    def test_filter_mouse_focus_and_arrow_keys_adjust_one_step_and_clamp(self):
+        self.root.deiconify()
+        self.root.update()
+        scale = self.app.hearing_scale
+        scale.event_generate("<Button-1>", x=30, y=5)
+        self.root.update()
+        self.assertEqual(self.root.focus_get(), scale)
+        self.app.hearing_impaired_strictness.set(42)
+        scale.event_generate("<Right>")
+        self.root.update()
+        self.assertEqual(self.app.hearing_impaired_strictness.get(), 43)
+        scale.event_generate("<Left>")
+        self.root.update()
+        self.assertEqual(self.app.hearing_impaired_strictness.get(), 42)
+        self.app.hearing_impaired_strictness.set(100)
+        scale.event_generate("<Up>")
+        self.assertEqual(self.app.hearing_impaired_strictness.get(), 100)
+        self.app.hearing_impaired_strictness.set(0)
+        scale.event_generate("<Down>")
+        self.assertEqual(self.app.hearing_impaired_strictness.get(), 0)
+
+    def test_folder_discovery_language_aliases_regions_and_generated_outputs(self):
+        folder = Path(self.temporary.name)
+        for name in ("Episode.Portuguese.srt", "Episode.English.srt", "Other.pt-pt.srt",
+                     "Other.pt-br.srt", "Other.en.srt", "Other.pt-br.synced.srt", "Unknown.srt"):
+            (folder / name).touch()
+        files = self.gui.folder_subtitles(folder)
+        self.assertEqual(set(files["episode"]), {"pt", "en"})
+        self.assertEqual(set(files["other"]), {"pt-pt", "pt-br", "en"})
+        self.assertEqual(len(files), 2)
+
+    def test_folder_popup_displays_selected_source_reference_and_requires_automatic_mode(self):
+        folder = Path(self.temporary.name)
+        (folder / "Episode.Portuguese.srt").touch()
+        (folder / "Episode.en.srt").touch()
+        with patch.object(self.gui.filedialog, "askdirectory", return_value=str(folder)):
+            self.app._choose_folder()
+        popup = next(widget for widget in self.root.winfo_children() if isinstance(widget, tk.Toplevel))
+        combos = [widget for widget in popup.winfo_children() if isinstance(widget, ttk.Combobox)]
+        self.assertEqual(set(combos[0]["values"]), {"pt", "en"})
+        combos[0].set("pt")
+        combos[1].set("en")
+        accept = next(widget for widget in popup.winfo_children()
+                      if isinstance(widget, ttk.Button) and widget["text"] == "Open")
+        accept.invoke()
+        self.assertEqual(self.app.folder_path.get(), str(folder))
+        self.assertEqual(self.app.folder_language_text.get(), "Source: pt\nReference: en")
+        self.change("pt", "dark")
+        self.assertEqual(self.app.folder_language_text.get(), "Origem: pt\nReferência: en")
+        self.assertEqual(self.app.automatic_initial.get(), "1")
+        self.app.automatic_initial.set("0")
+        self.assertEqual(self.app.automatic_initial.get(), "1")
+        self.assertEqual(self.app.folder_group["text"], "Modo de pasta SRT")
+        self.assertEqual(self.app.folder_browse.grid_info()["row"], self.app.folder_entry.grid_info()["row"])
+        self.assertEqual(str(self.app.folder_entry["state"]), "normal")
+        self.assertFalse(any(isinstance(widget, ttk.Button) and widget["text"] == "Limpar"
+                             for widget in self.app.folder_group.winfo_children()))
+        self.assertEqual(set(self.app.folder_source_combo["values"]), {"pt", "en"})
+        self.app.folder_source_combo.set("en")
+        self.app.folder_reference_combo.set("pt")
+        self.app.folder_reference_combo.event_generate("<<ComboboxSelected>>")
+        self.assertEqual((self.app.folder_source, self.app.folder_reference), ("en", "pt"))
+        self.app.folder_entry.delete(0, "end")
+        self.assertEqual(self.app.folder_path.get(), "")
+        self.assertEqual(self.app.folder_source_combo.get(), "")
+        self.assertEqual(self.app.folder_reference_combo.get(), "")
+        self.assertEqual(self.app.folder_source_combo["values"], "")
+
+    def test_typed_srt_folder_path_refreshes_languages_without_popup(self):
+        folder = Path(self.temporary.name)
+        for name in ("Episode.pt-br.srt", "Episode.en.srt"):
+            (folder / name).touch()
+        self.app.folder_entry.insert(0, str(folder))
+        self.app._refresh_folder()
+        self.assertEqual(set(self.app.folder_source_combo["values"]), {"en", "pt-br"})
+        self.assertEqual(set(self.app.folder_reference_combo["values"]), {"en", "pt-br"})
+        self.assertEqual(self.app.automatic_initial.get(), "1")
+
+    def test_folder_browse_buttons_are_right_of_editable_paths_and_audio_sync_is_below(self):
+        self.root.deiconify()
+        self.root.update()
+        for entry, browse in ((self.app.folder_entry, self.app.folder_browse),
+                              (self.app.audio_folder_entry, self.app.audio_folder_browse)):
+            self.assertEqual(str(entry["state"]), "normal")
+            self.assertEqual(entry.grid_info()["row"], browse.grid_info()["row"])
+            self.assertLess(entry.grid_info()["column"], browse.grid_info()["column"])
+            self.assertLessEqual(entry.winfo_rootx() + entry.winfo_width(), browse.winfo_rootx())
+        self.assertGreater(
+            self.app.audio_folder_sync.grid_info()["row"], self.app.audio_folder_entry.grid_info()["row"],
+        )
+        with patch.object(self.gui.filedialog, "askdirectory", return_value=self.temporary.name):
+            self.app.audio_folder_browse.invoke()
+        self.assertEqual(self.app.audio_folder_path.get(), self.temporary.name)
+        self.app.audio_folder_entry.delete(0, "end")
+        self.assertEqual(self.app.audio_folder_path.get(), "")
+
+    def test_audio_folder_requires_path_and_blocks_competing_work(self):
+        with patch.object(self.gui.messagebox, "showerror") as error:
+            self.app.audio_folder_sync.invoke()
+        self.assertIn("Choose a folder first", error.call_args.args[1])
+        self.app.busy = True
+        with patch.object(self.gui.threading, "Thread") as thread:
+            self.app.audio_folder_sync.invoke()
+        thread.assert_not_called()
+        self.app.busy = False
+
+    def test_audio_folder_report_failure_keeps_successful_srt(self):
+        folder = Path(self.temporary.name)
+        source = folder / "Episode.pt.srt"
+        video = folder / "Episode.mkv"
+        output = folder / "Episode.pt.audio-synced.srt"
+        content = "1\n00:00:01,000 --> 00:00:02,000\nDialogue\n"
+        source.write_text(content)
+        video.touch()
+        events = self.gui.queue.Queue()
+
+        def sync(*args, **kwargs):
+            output.write_text(content)
+            return 1
+
+        with (
+            patch.object(self.gui.audio_sync, "inspect_tracks", return_value=[
+                self.gui.audio_sync.Track(0, "Audio", "aac", "0: eng (aac)"),
+            ]),
+            patch.object(self.gui.audio_sync, "synchronize", side_effect=sync),
+            patch.object(self.gui, "write_report", side_effect=PermissionError("Report denied")),
+        ):
+            self.app._audio_folder_worker(video, source, output, True, events)
+        self.assertEqual(list(events.queue)[-1][0], "success")
+        self.assertEqual(list(events.queue)[-1][1][2]["report_error"], "Report denied")
+        self.assertEqual(output.read_text(), content)
+
+    def test_audio_folder_runs_all_matching_languages_and_aligned_srts_without_reference_analysis(self):
+        folder = Path(self.temporary.name)
+        content = "1\n00:00:01,000 --> 00:00:02,000\nDialogue\n"
+        names = ("A.pt.srt", "A.en.srt", "A.pt.synced.srt", "B.srt", "Missing.pt.srt",
+                 "Duplicate.pt.srt", "A.pt.audio-synced.srt")
+        for name in names:
+            (folder / name).write_text(content)
+        for name in ("A.mkv", "B.mp4", "Duplicate.mkv", "Duplicate.mp4"):
+            (folder / name).touch()
+        self.app.audio_folder_path.set(str(folder))
+        self.app.report_enabled.set("1")
+        self.app.processing_device.set("NVIDIA")
+        self.app.device_id.set("invalid")
+
+        def sync(video, source, output, track, subtitle, drift, progress, cancel, **kwargs):
+            self.assertEqual(track, 2)
+            self.assertTrue(drift)
+            self.assertTrue(kwargs["fix_sections"])
+            self.assertIsNone(subtitle)
+            output.write_text(content.replace("01,000", "02,000"))
+            progress("Audio alignment completed")
+            return 1
+
+        with (
+            patch.object(self.gui.threading, "Thread", side_effect=lambda **kwargs: Mock(start=kwargs["target"])),
+            patch.object(self.root, "after"),
+            patch.object(self.gui.subtitle_alignment, "analyze_subtitles") as analyze,
+            patch.object(self.gui.audio_sync, "inspect_tracks", return_value=[
+                self.gui.audio_sync.Track(2, "Audio", "aac", "2: eng (aac)"),
+            ]),
+            patch.object(self.gui.audio_sync, "synchronize", side_effect=sync) as synchronize,
+        ):
+            self.app.audio_folder_sync.invoke()
+        analyze.assert_not_called()
+        self.assertEqual(synchronize.call_count, 3)
+        rows = list(self.app.messages.queue)[-1][1]
+        self.assertEqual(len(rows), 6)
+        self.assertEqual([row[1] for row in rows], ["Success", "Skipped", "Success", "Success", "Failed", "Failed"])
+        self.assertTrue((folder / "A.en.audio-synced.srt").is_file())
+        self.assertTrue((folder / "A.pt.synced.audio-synced.srt").is_file())
+        self.assertTrue((folder / "B.audio-synced.srt").is_file())
+        self.assertTrue((folder / "A.en.sync.txt").is_file())
+        self.assertEqual(self.app.automatic_initial.get(), "0")
+        with patch.object(self.app, "_show_folder_report"):
+            self.app._poll_worker()
+        self.assertFalse(self.app.busy)
+        self.assertEqual(str(self.app.audio_folder_sync["state"]), "normal")
+
+    def test_audio_folder_continues_after_audio_failure_and_cancels_remaining_pairs(self):
+        folder = Path(self.temporary.name)
+        content = "1\n00:00:01,000 --> 00:00:02,000\nDialogue\n"
+        for stem in ("A", "B", "C"):
+            (folder / f"{stem}.pt.srt").write_text(content)
+            (folder / f"{stem}.mkv").touch()
+        self.app.audio_folder_path.set(str(folder))
+        calls = []
+
+        def sync(*args, **kwargs):
+            calls.append(1)
+            if len(calls) == 1:
+                raise ValueError("Speech matching was unreliable.")
+            self.app.sync_cancel.set()
+            raise self.gui.audio_sync.CancelledError("Cancelled")
+
+        with (
+            patch.object(self.gui.threading, "Thread", side_effect=lambda **kwargs: Mock(start=kwargs["target"])),
+            patch.object(self.root, "after"),
+            patch.object(self.gui.audio_sync, "inspect_tracks", return_value=[
+                self.gui.audio_sync.Track(0, "Audio", "aac", "0: eng (aac)"),
+            ]),
+            patch.object(self.gui.audio_sync, "synchronize", side_effect=sync),
+        ):
+            self.app.audio_folder_sync.invoke()
+        rows = list(self.app.messages.queue)[-1][1]
+        self.assertEqual([row[1] for row in rows], ["Failed", "Cancelled", "Cancelled"])
+        self.assertEqual(len(calls), 2)
+        self.app.batch_running = False
+        self.app._finish()
+
+    def test_folder_batch_continues_after_failed_initial_match_and_reports_every_file(self):
+        folder = Path(self.temporary.name)
+        original = "1\n00:00:01,000 --> 00:00:02,000\nDialogue\n"
+        for stem in ("A", "B", "C", "D"):
+            (folder / f"{stem}.pt.srt").write_text(original)
+            if stem != "D":
+                (folder / f"{stem}.en.srt").write_text(original)
+        (folder / "C.pt.synced.srt").write_text("existing result")
+        self.app.folder_path.set(str(folder))
+        self.app.folder_source, self.app.folder_reference = "pt", "en"
+        calls = []
+
+        def analyze(source, reference, initial, **kwargs):
+            self.assertTrue(kwargs["automatic_initial"])
+            calls.append(1)
+            if len(calls) == 1:
+                raise ValueError("Cannot confidently find an automatic initial sync point. Select matching cues manually.")
+            return [(1, 1.)], {"matched_cues": 1, "match_percent": 100, "source_anchor": 1, "reference_anchor": 1}
+
+        def thread(**kwargs):
+            return Mock(start=kwargs["target"])
+
+        with (
+            patch.object(self.gui.threading, "Thread", side_effect=thread),
+            patch.object(self.root, "after"),
+            patch.object(self.gui.subtitle_alignment, "validate_processing_device"),
+            patch.object(self.gui.subtitle_alignment, "analyze_subtitles", side_effect=analyze),
+        ):
+            self.app._start_sync()
+        final = list(self.app.messages.queue)[-1]
+        self.assertEqual(final[0], "batch_complete")
+        self.assertEqual([row[1] for row in final[1]], ["Failed", "Success", "Skipped", "Failed"])
+        self.assertFalse((folder / "A.pt.synced.srt").exists())
+        self.assertIn("00:00:02,000", (folder / "B.pt.synced.srt").read_text())
+        self.assertEqual((folder / "C.pt.synced.srt").read_text(), "existing result")
+        with patch.object(self.app, "_show_folder_report") as report:
+            self.app._poll_worker()
+        report.assert_called_once_with(final[1])
+        self.assertFalse(self.app.busy)
+        self.assertFalse(self.app.batch_running)
+        self.app._show_folder_report(final[1])
+        popup = next(widget for widget in self.root.winfo_children() if isinstance(widget, tk.Toplevel))
+        table = next(widget for widget in popup.winfo_children() if isinstance(widget, ttk.Treeview))
+        self.assertEqual(len(table.get_children()), 4)
+        popup.destroy()
+
+    def test_folder_cancellation_marks_remaining_files_and_does_not_run_next_worker(self):
+        folder = Path(self.temporary.name)
+        for name in ("A.pt.srt", "A.en.srt", "B.pt.srt", "B.en.srt"):
+            (folder / name).write_text("1\n00:00:01,000 --> 00:00:02,000\nDialogue\n")
+        self.app.folder_path.set(str(folder))
+        self.app.folder_source, self.app.folder_reference = "pt", "en"
+
+        def cancel(*args, **kwargs):
+            self.app.sync_cancel.set()
+            raise self.gui.gpu_runtime.CancelledError("Cancelled")
+
+        with (
+            patch.object(self.gui.threading, "Thread", side_effect=lambda **kwargs: Mock(start=kwargs["target"])),
+            patch.object(self.root, "after"),
+            patch.object(self.gui.subtitle_alignment, "validate_processing_device"),
+            patch.object(self.gui.subtitle_alignment, "analyze_subtitles", side_effect=cancel) as analyze,
+        ):
+            self.app._start_sync()
+        self.assertEqual(analyze.call_count, 1)
+        rows = list(self.app.messages.queue)[-1][1]
+        self.assertEqual([row[1] for row in rows], ["Cancelled", "Cancelled"])
+        self.app.batch_running = False
+        self.app._finish()
+
+    def test_folder_batch_requires_unique_reference_and_video_and_does_not_guess(self):
+        folder = Path(self.temporary.name)
+        for name in ("A.pt.srt", "A.en.srt", "A.English.srt", "B.pt.srt", "B.en.srt",
+                     "C.pt.srt", "C.en.srt", "C.mkv", "C.mp4"):
+            (folder / name).write_text("1\n00:00:01,000 --> 00:00:02,000\nDialogue\n")
+        self.app.folder_path.set(str(folder))
+        self.app.folder_source, self.app.folder_reference = "pt", "en"
+        with (
+            patch.object(self.gui.threading, "Thread", side_effect=lambda **kwargs: Mock(start=kwargs["target"])),
+            patch.object(self.root, "after"),
+            patch.object(self.gui.subtitle_alignment, "validate_processing_device"),
+            patch.object(self.app, "_sync_worker") as worker,
+        ):
+            self.app.audio_after_sync.set("1")
+            self.app._start_sync()
+        worker.assert_not_called()
+        rows = list(self.app.messages.queue)[-1][1]
+        self.assertEqual(len(rows), 3)
+        self.assertTrue(all(row[1] == "Failed" for row in rows))
+        self.assertTrue(all("video" in row[3] for row in rows))
+        self.app.batch_running = False
+        self.app._finish()
+        while not self.app.messages.empty():
+            self.app.messages.get_nowait()
+        self.app.audio_after_sync.set("0")
+        with (
+            patch.object(self.gui.threading, "Thread", side_effect=lambda **kwargs: Mock(start=kwargs["target"])),
+            patch.object(self.root, "after"),
+            patch.object(self.gui.subtitle_alignment, "validate_processing_device"),
+            patch.object(self.gui.subtitle_alignment, "analyze_subtitles", side_effect=ValueError("Uncertain match")),
+        ):
+            self.app._start_sync()
+        rows = list(self.app.messages.queue)[-1][1]
+        self.assertEqual(rows[0][3], "Ambiguous subtitle pair.")
+        self.app.batch_running = False
+        self.app._finish()
+
+    def test_folder_worker_does_not_overwrite_output_created_during_analysis(self):
+        folder = Path(self.temporary.name)
+        source = folder / "episode.pt.srt"
+        reference = folder / "episode.en.srt"
+        output = folder / "episode.pt.synced.srt"
+        for path in (source, reference):
+            path.write_text("1\n00:00:01,000 --> 00:00:02,000\nDialogue\n")
+        events = self.gui.queue.Queue()
+
+        def analyze(*args, **kwargs):
+            output.write_text("created by someone else")
+            return [(1, 0.)], {"matched_cues": 1}
+
+        with patch.object(self.gui.subtitle_alignment, "analyze_subtitles", side_effect=analyze):
+            self.app._sync_worker(None, source, reference, output, 0, 70, events=events)
+        self.assertEqual(list(events.queue)[-1][0], "error")
+        self.assertEqual(output.read_text(), "created by someone else")
+
+    def test_folder_worker_saves_on_share_without_hardlink_support(self):
+        import errno
+
+        folder = Path(self.temporary.name)
+        source = folder / "episode.pt.srt"
+        source.write_text("1\n00:00:01,000 --> 00:00:02,000\nDialogue\n")
+        output = folder / "episode.pt.synced.srt"
+        events = self.gui.queue.Queue()
+        with (
+            patch.object(self.gui.subtitle_alignment, "analyze_subtitles", return_value=(
+                [(1, 1.)], {"matched_cues": 1},
+            )),
+            patch.object(self.gui.sync_subtitles.os, "link", side_effect=OSError(errno.EPERM, "Operation not permitted")),
+        ):
+            self.app._sync_worker(None, source, source, output, 0, 70, events=events)
+        self.assertEqual(list(events.queue)[-1][0], "success")
+        self.assertIn("00:00:02,000", output.read_text())
+        self.assertFalse(list(folder.glob(".subtitle-sync-*")))
+
+    def test_report_box_is_right_of_processing_and_checkbox_is_optional_persistent_and_translated(self):
+        processing = self.app.device_selector.master
+        report = self.app.report_group
+        self.assertIs(report.master, processing.master)
+        self.assertEqual(report.grid_info()["row"], processing.grid_info()["row"])
+        self.assertEqual(report.grid_info()["column"], 1)
+        self.assertEqual(processing.grid_info()["column"], 0)
+        self.assertEqual(self.app.report_enabled.get(), "0")
+        self.app.report_checkbox.invoke()
+        self.assertEqual(self.app.report_enabled.get(), "1")
+        self.change("pt", "dark")
+        self.assertEqual(report["text"], "Relatório")
+        self.assertEqual(self.app.report_checkbox["text"], "Gerar relatório de sincronização")
+        self.root.deiconify()
+        self.root.update()
+        self.assertLessEqual(processing.winfo_rootx() + processing.winfo_width(), report.winfo_rootx())
+        second = tk.Tk()
+        second.withdraw()
+        try:
+            app = self.gui.SubtitleSyncApp(second)
+            self.assertEqual(app.report_enabled.get(), "1")
+        finally:
+            second.destroy()
+        with patch.object(self.gui, "AudioSyncDialog") as dialog, patch.object(self.root, "wait_window"):
+            self.app._open_audio_sync()
+        self.assertTrue(dialog.call_args.kwargs["generate_report"])
+
+    def test_reference_sync_report_is_opt_in_and_report_failure_does_not_undo_srt(self):
+        from sync_report import report_path
+
+        source = Path(self.temporary.name) / "episode.pt.srt"
+        source.write_text("1\n00:00:01,000 --> 00:00:02,000\nHello\n")
+        output = source.with_suffix(".synced.srt")
+        diagnostics = {"matched_cues": 1, "match_percent": 100}
+        with patch.object(
+            self.gui.subtitle_alignment, "analyze_subtitles",
+            return_value=([(1, 1.5)], diagnostics),
+        ):
+            self.app._sync_worker(None, source, source, output, 1000, 70)
+            self.assertFalse(report_path(output).exists())
+            self.app._sync_worker(None, source, source, output, 1000, 70, generate_report=True)
+            self.assertIn("start shift +1500 ms", report_path(output).read_text())
+            with patch.object(self.gui, "write_report", side_effect=PermissionError("Report is read-only")):
+                self.app._sync_worker(None, source, source, output, 1000, 70, generate_report=True)
+        messages = list(self.app.messages.queue)
+        self.assertEqual(messages[-1][0], "success")
+        self.assertEqual(messages[-1][1][2]["report_error"], "Report is read-only")
+        self.assertIn("00:00:02,500", output.read_text())
+        while not self.app.messages.empty():
+            self.app.messages.get_nowait()
+        self.app.messages.put(messages[-1])
+        with (
+            patch.object(self.gui.messagebox, "showwarning") as warning,
+            patch.object(self.gui.messagebox, "showinfo") as info,
+        ):
+            self.app._poll_worker()
+        self.assertIn("Report is read-only", warning.call_args.args[1])
+        self.assertIn("Synchronized 1 subtitle cues", info.call_args.args[1])
+
+    def test_cancelled_sync_does_not_generate_report(self):
+        from sync_report import report_path
+
+        source = Path(self.temporary.name) / "episode.pt.srt"
+        source.write_text("1\n00:00:01,000 --> 00:00:02,000\nHello\n")
+        output = source.with_suffix(".synced.srt")
+
+        def analyze(*args, **kwargs):
+            self.app.sync_cancel.set()
+            return [(1, 1.5)], {"matched_cues": 1}
+
+        with patch.object(self.gui.subtitle_alignment, "analyze_subtitles", side_effect=analyze):
+            self.app._sync_worker(None, source, source, output, 1000, 70, generate_report=True)
+        self.assertFalse(output.exists())
+        self.assertFalse(report_path(output).exists())
+
+    def test_audio_after_analysis_checkbox_requires_video_and_is_in_report_box(self):
+        self.assertIs(self.app.audio_after_checkbox.master, self.app.report_group)
+        self.assertEqual(self.app.audio_after_sync.get(), "0")
+        self.app.audio_after_checkbox.invoke()
+        for value in ("", "/missing/video.mkv"):
+            self.app.video_path.set(value)
+            with (
+                patch.object(self.gui.messagebox, "showwarning") as warning,
+                patch.object(self.gui.threading, "Thread") as thread,
+            ):
+                self.app._start_sync()
+            thread.assert_not_called()
+            self.assertIn("valid video file", warning.call_args.args[1])
+        self.change("pt", "dark")
+        self.assertEqual(self.app.audio_after_checkbox["text"], "Sincronizar com o áudio após a análise")
+        second = tk.Tk()
+        second.withdraw()
+        try:
+            app = self.gui.SubtitleSyncApp(second)
+            self.assertEqual(app.audio_after_sync.get(), "1")
+        finally:
+            second.destroy()
+
+    def test_automatic_initial_checkbox_is_in_anchor_box_persistent_and_translated(self):
+        checkbox = self.app.automatic_initial_checkbox
+        self.assertIs(checkbox.master, self.app.pair_button.master)
+        self.assertEqual(self.app.automatic_initial.get(), "0")
+        checkbox.invoke()
+        self.assertEqual(self.app.automatic_initial.get(), "1")
+        self.assertEqual(str(self.app.pair_button["state"]), "disabled")
+        self.change("pt", "dark")
+        self.assertEqual(checkbox["text"], "Selecionar automaticamente o ponto de sincronização inicial")
+        second = tk.Tk()
+        second.withdraw()
+        try:
+            other = self.gui.SubtitleSyncApp(second)
+            self.assertEqual(other.automatic_initial.get(), "1")
+        finally:
+            second.destroy()
+        checkbox.invoke()
+        self.assertEqual(str(self.app.pair_button["state"]), "normal")
+
+    def test_automatic_initial_starts_without_manual_selection_or_video_with_external_reference(self):
+        source = Path(self.temporary.name) / "source.srt"
+        source.write_text("1\n00:00:01,000 --> 00:00:02,000\nDialogue\n")
+        self.app.source_path.set(str(source))
+        self.app.reference_path.set(str(source))
+        self.app.output_path.set(str(source.with_suffix(".synced.srt")))
+        self.app.automatic_initial.set("1")
+        with (
+            patch.object(self.gui.threading, "Thread") as thread,
+            patch.object(self.root, "after"),
+            patch.object(self.gui.subtitle_alignment, "validate_processing_device"),
+            patch.object(self.gui.messagebox, "showwarning") as warning,
+        ):
+            self.app._start_sync()
+        warning.assert_not_called()
+        self.assertTrue(thread.call_args.kwargs["kwargs"]["automatic_initial"])
+        self.assertIsNone(thread.call_args.kwargs["kwargs"]["selection"])
+        self.app._finish()
+
+    def test_automatic_initial_worker_and_result_display_preserve_original_cue_numbers(self):
+        source = Path(self.temporary.name) / "source.srt"
+        source.write_text("1\n00:00:01,000 --> 00:00:02,000\nFirst dialogue\n\n"
+                          "2\n00:00:04,000 --> 00:00:05,000\nSecond dialogue\n")
+        output = source.with_suffix(".synced.srt")
+        with patch.object(self.gui.subtitle_alignment, "analyze_subtitles", return_value=(
+            [(2, 1.)], {"matched_cues": 1, "match_percent": 100, "source_anchor": 2,
+                         "reference_anchor": 2, "anchor_time_ms": 4000},
+        )) as analyze:
+            self.app._sync_worker(None, source, source, output, 0, 70, automatic_initial=True)
+        self.assertTrue(analyze.call_args.kwargs["automatic_initial"])
+        with patch.object(self.gui.messagebox, "showinfo"):
+            self.app._poll_worker()
+        self.assertEqual(self.app.sync_selection.source_number, 2)
+        self.assertEqual(self.app.sync_selection.reference_number, 2)
+        self.assertIn("Source cue 2", self.app.first_cue_text.get())
+        self.assertEqual(self.app.initial_time.get(), self.gui.format_time(4000))
+
+    def test_automatic_initial_uncertainty_keeps_existing_output_and_manual_mode_available(self):
+        source = Path(self.temporary.name) / "source.srt"
+        source.write_text("1\n00:00:01,000 --> 00:00:02,000\nDialogue\n")
+        output = source.with_suffix(".synced.srt")
+        output.write_text("previous output")
+        message = "Cannot confidently find an automatic initial sync point. Select matching cues manually."
+        self.app.automatic_initial.set("1")
+        self.change("pt")
+        with patch.object(self.gui.subtitle_alignment, "analyze_subtitles", side_effect=ValueError(message)):
+            self.app._sync_worker(None, source, source, output, 0, 70, automatic_initial=True)
+        with patch.object(self.gui.messagebox, "showerror") as error:
+            self.app._poll_worker()
+        self.assertEqual(output.read_text(), "previous output")
+        self.assertEqual(error.call_args.args[1], self.app.interface.tr(message))
+        self.assertEqual(str(self.app.automatic_initial_checkbox["state"]), "normal")
+        self.app.automatic_initial_checkbox.invoke()
+        self.assertEqual(str(self.app.pair_button["state"]), "normal")
+
+    def test_automatic_initial_is_forwarded_to_vulkan_and_private_gpu_workers(self):
+        source = Path(self.temporary.name) / "source.srt"
+        source.write_text("1\n00:00:01,000 --> 00:00:02,000\nDialogue\n")
+        output = source.with_suffix(".synced.srt")
+        diagnostics = {"matched_cues": 1, "source_anchor": 1, "reference_anchor": 1}
+        for backend in ("ONNX", "Vulkan"):
+            with (
+                patch.object(self.gui.gpu_runtime, "runtime_ready", return_value=True),
+                patch.object(self.gui.gpu_runtime, "run_worker", return_value={
+                    "anchors": [(1, 0.)], "diagnostics": diagnostics,
+                }) as worker,
+                patch.object(self.gui.subtitle_alignment, "analyze_subtitles", return_value=(
+                    [(1, 0.)], diagnostics,
+                )) as analyze,
+            ):
+                self.app._sync_worker(
+                    None, source, source, output, 0, 70, processing_device="NVIDIA",
+                    backend=backend, automatic_initial=True,
+                )
+            self.assertEqual(list(self.app.messages.queue)[-1][0], "success")
+            if backend == "Vulkan":
+                self.assertTrue(analyze.call_args.kwargs["automatic_initial"])
+                worker.assert_not_called()
+            else:
+                self.assertTrue(worker.call_args.args[2]["automatic_initial"])
+                analyze.assert_not_called()
+
+    def test_automatic_embedded_reference_preload_does_not_open_manual_picker_or_repeat_loading(self):
+        from manual_sync import input_signatures
+
+        source = Path(self.temporary.name) / "source.srt"
+        source.write_text("1\n00:00:01,000 --> 00:00:02,000\nDialogue\n")
+        video = source.with_suffix(".mkv")
+        video.write_bytes(b"video")
+        self.app.source_path.set(str(source))
+        self.app.video_path.set(str(video))
+        self.app.output_path.set(str(source.with_suffix(".synced.srt")))
+        self.app.automatic_initial.set("1")
+        with patch.object(self.app, "_open_initial_sync") as load, patch.object(
+            self.gui.subtitle_alignment, "validate_processing_device",
+        ):
+            self.app._start_sync()
+        load.assert_called_once()
+        cues = tuple(self.gui.subtitle_alignment.read_srt(source))
+        self.app.messages.put(("select_pair", (cues, cues, input_signatures((str(source), str(video))))))
+        with (
+            patch.object(self.app, "_show_pair_picker") as picker,
+            patch.object(self.app, "_open_initial_sync") as load,
+            patch.object(self.gui.threading, "Thread") as thread,
+            patch.object(self.root, "after"),
+            patch.object(self.gui.subtitle_alignment, "validate_processing_device"),
+        ):
+            self.app._poll_worker()
+        picker.assert_not_called()
+        load.assert_not_called()
+        self.assertTrue(thread.call_args.kwargs["kwargs"]["automatic_initial"])
+        self.app._finish()
+
+    def test_automatic_audio_pass_uses_aligned_source_and_commits_only_after_both_stages(self):
+        from sync_report import report_path
+
+        source = Path(self.temporary.name) / "episode.pt.srt"
+        original = "1\n00:00:01,000 --> 00:00:02,000\nHello\n"
+        source.write_text(original)
+        output = source.with_suffix(".synced.srt")
+        video = source.with_suffix(".mkv")
+        video.write_bytes(b"video")
+        output.write_text("previous output")
+        track = self.gui.audio_sync.Track(2, "Audio", "aac", "2: eng (aac)")
+
+        def audio_pass(video_path, staged, result, *args, **kwargs):
+            self.assertEqual(video_path, video)
+            self.assertIn("00:00:02,500", staged.read_text())
+            self.assertEqual(output.read_text(), "previous output")
+            self.assertEqual(args[:3], (2, None, True))
+            result.write_text(original.replace("01,000", "03,000").replace("02,000", "04,000"))
+            return 1
+
+        with (
+            patch.object(self.gui.subtitle_alignment, "analyze_subtitles", return_value=(
+                [(1, 1.5)], {"matched_cues": 1, "match_percent": 100},
+            )),
+            patch.object(self.gui.audio_sync, "inspect_tracks", return_value=[track]),
+            patch.object(self.gui.audio_sync, "synchronize", side_effect=audio_pass),
+        ):
+            self.app._sync_worker(
+                video, source, source, output, 1000, 70, sync_to_audio=True, generate_report=True,
+            )
+        self.assertIn("00:00:03,000", output.read_text())
+        self.assertEqual(source.read_text(), original)
+        self.assertIn("start shift +2000 ms", report_path(output).read_text())
+        self.assertIn("first audio track", report_path(output).read_text())
+        self.assertFalse(list(output.parent.glob(".subtitle-sync-*")))
+
+    def test_failed_or_cancelled_audio_pass_preserves_existing_output(self):
+        source = Path(self.temporary.name) / "episode.pt.srt"
+        source.write_text("1\n00:00:01,000 --> 00:00:02,000\nHello\n")
+        output = source.with_suffix(".synced.srt")
+        video = source.with_suffix(".mkv")
+        video.write_bytes(b"video")
+        for error in (ValueError("No speech detected"), self.gui.audio_sync.CancelledError("Cancelled")):
+            output.write_text("previous output")
+            with (
+                patch.object(self.gui.subtitle_alignment, "analyze_subtitles", return_value=(
+                    [(1, 1.5)], {"matched_cues": 1},
+                )),
+                patch.object(self.gui.audio_sync, "inspect_tracks", return_value=[
+                    self.gui.audio_sync.Track(0, "Audio", "aac", "0: eng (aac)"),
+                ]),
+                patch.object(self.gui.audio_sync, "synchronize", side_effect=error),
+            ):
+                self.app._sync_worker(video, source, source, output, 1000, 70, sync_to_audio=True)
+            self.assertEqual(output.read_text(), "previous output")
+            self.assertFalse(list(output.parent.glob(".subtitle-sync-*")))
+            last = list(self.app.messages.queue)[-1]
+            self.assertEqual(
+                last[0], "cancelled" if isinstance(error, self.gui.audio_sync.CancelledError) else "error",
+            )
+            self.assertIn(str(error), last[1])
+
+    def test_source_selection_offers_discovered_references(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "Episode.pt.srt"
+            reference = Path(directory) / "Episode.en.srt"
+            for path in (source, reference):
+                path.write_text("1\n00:00:01,000 --> 00:00:02,000\nTest\n")
+            with (
+                patch.object(self.gui.filedialog, "askopenfilename", return_value=str(source)),
+                patch.object(self.app, "_offer_reference_candidates") as offer,
+            ):
+                self.app._choose_source()
+            offer.assert_called_once_with([reference])
+            self.assertEqual(self.app.source_path.get(), str(source))
+
+    def test_single_reference_offer_accept_decline_and_invalid_file(self):
+        reference = Path(self.temporary.name) / "Episode.en.srt"
+        reference.write_text("1\n00:00:01,000 --> 00:00:02,000\nTest\n")
+        self.app.reference_path.set("previous.srt")
+        def popup():
+            return next(child for child in self.root.winfo_children() if isinstance(child, tk.Toplevel))
+
+        def use(window):
+            next(child for child in _descendants(window) if isinstance(child, ttk.Button)
+                 and child["text"] == "Use this reference").invoke()
+
+        self.app._offer_reference_candidates([reference])
+        popup().destroy()
+        self.assertEqual(self.app.reference_path.get(), "previous.srt")
+        self.app._offer_reference_candidates([reference])
+        use(popup())
+        self.assertEqual(self.app.reference_path.get(), str(reference))
+        reference.unlink()
+        with (
+            patch.object(self.gui.messagebox, "showerror") as error,
+        ):
+            self.app._offer_reference_candidates([reference])
+            use(popup())
+            popup().destroy()
+        error.assert_called_once()
+        self.assertEqual(self.app.reference_path.get(), str(reference))
+
+    def test_multiple_references_allow_choice_or_cancellation(self):
+        candidates = [Path(self.temporary.name) / name for name in ("Episode.en.srt", "Episode.fr.srt")]
+        for path in candidates:
+            path.write_text("1\n00:00:01,000 --> 00:00:02,000\nTest\n")
+        self.app.reference_path.set("previous.srt")
+        self.app._offer_reference_candidates(candidates)
+        window = next(child for child in self.root.winfo_children() if isinstance(child, tk.Toplevel))
+        window.destroy()
+        self.assertEqual(self.app.reference_path.get(), "previous.srt")
+        self.app._offer_reference_candidates(candidates)
+        window = next(child for child in self.root.winfo_children() if isinstance(child, tk.Toplevel))
+        combo = next(child for child in _descendants(window) if isinstance(child, ttk.Combobox))
+        combo.current(1)
+        button = next(child for child in _descendants(window) if isinstance(child, ttk.Button)
+                      and child["text"] == "Use this reference")
+        button.invoke()
+        self.assertEqual(self.app.reference_path.get(), str(candidates[1]))
+
+    def test_subtitle_choosers_match_all_themes_and_source_selection_sets_output(self):
+        source = Path(self.temporary.name) / "Episode.pt.srt"
+        source.write_text("1\n00:00:01,000 --> 00:00:02,000\nTest\n")
+        for theme, dark in (("light", False), ("dark", True), ("system", False), ("system", True)):
+            with patch.object(preferences, "system_is_dark", return_value=dark):
+                self.change(theme=theme)
+                for is_source in (False, True):
+                    self.app._offer_subtitle_candidates([source], source=is_source)
+                    window = next(child for child in self.root.winfo_children() if isinstance(child, tk.Toplevel))
+                    self.assertEqual(window["background"], self.root["background"])
+                    use = next(child for child in _descendants(window) if isinstance(child, ttk.Button)
+                               and str(child["text"]).startswith("Use this"))
+                    self.assertEqual(use.winfo_manager(), "grid")
+                    self.assertEqual(
+                        self.app.interface.style.lookup("TFrame", "background"), self.root["background"],
+                    )
+                    window.destroy()
+        self.change()
+        self.app._offer_subtitle_candidates([source], source=True)
+        window = next(child for child in self.root.winfo_children() if isinstance(child, tk.Toplevel))
+        next(child for child in _descendants(window) if isinstance(child, ttk.Button)
+             and child["text"] == "Use this source").invoke()
+        self.assertEqual(self.app.source_path.get(), str(source))
+        self.assertEqual(self.app.output_path.get(), str(source.with_name("Episode.pt.synced.srt")))
+
+    def test_reference_selection_offers_sources_and_about_has_credit(self):
+        source = Path(self.temporary.name) / "Episode.pt.srt"
+        reference = Path(self.temporary.name) / "Episode.en.srt"
+        source.touch()
+        reference.touch()
+        with (
+            patch.object(self.gui.filedialog, "askopenfilename", return_value=str(reference)),
+            patch.object(self.app, "_offer_subtitle_candidates") as offer,
+        ):
+            self.app._choose_reference()
+        offer.assert_called_once_with([source], source=True)
+        with patch.object(self.gui.messagebox, "showinfo") as info:
+            self.app._show_about()
+        self.assertIn("\ndeveloped by SMAP", info.call_args.args[1])
+
+    def test_audio_sync_action_opens_with_current_inputs_and_blocks_competing_work(self):
+        self.app.video_path.set("video.mkv")
+        self.app.source_path.set("source.srt")
+        self.app.reference_path.set("reference.srt")
+        self.app.output_path.set("other-output.srt")
+        with (
+            patch.object(self.gui, "AudioSyncDialog") as dialog,
+            patch.object(self.root, "wait_window") as wait,
+        ):
+            self.app.audio_sync_button.invoke()
+        self.assertEqual(
+            dialog.call_args.args,
+            (self.root, "video.mkv", "source.srt",
+             (Path("source.srt"), Path("reference.srt"), Path("other-output.srt"))),
+        )
+        self.app.sync_selection = Mock()
+        dialog.call_args.kwargs["on_saved"](Path("/audio-result.srt"))
+        self.assertEqual(self.app.reference_path.get(), "/audio-result.srt")
+        self.assertIsNone(self.app.sync_selection)
+        wait.assert_called_once_with(dialog.return_value)
+        self.assertFalse(self.app.setup_busy)
+        self.app.busy = True
+        with patch.object(self.gui, "AudioSyncDialog") as dialog, patch.object(
+            self.gui.messagebox, "showwarning",
+        ) as warning:
+            self.app._open_audio_sync()
+        dialog.assert_not_called()
+        warning.assert_called_once()
+        self.change("pt")
+        self.assertEqual(
+            self.app.audio_sync_button["text"], translations.translate("Sync to audio...", "pt"),
         )
 
     def test_library_controls_are_desktop_only(self):
@@ -216,13 +1138,22 @@ class InterfaceTests(unittest.TestCase):
         ):
             self.change(theme=theme)
             self.assertEqual(self.app.speech_button["background"], secondary)
+            for option in ("background", "foreground", "activebackground", "activeforeground", "disabledforeground"):
+                self.assertEqual(self.app.audio_sync_button[option], self.app.speech_button[option])
             self.assertEqual(self.app.cancel_sync_button["background"], secondary)
             self.assertEqual(self.app.sync_button["background"], primary)
             self.assertEqual(self.app.sync_button["foreground"], "white")
+        self.assertLess(self.app.audio_sync_button.winfo_x(), self.app.speech_button.winfo_x())
         self.assertLess(self.app.speech_button.winfo_x(), self.app.sync_button.winfo_x())
         self.assertLess(self.app.sync_button.winfo_x(), self.app.gear_button.winfo_x())
         self.assertLess(self.app.sync_button.winfo_x(), self.app.cancel_sync_button.winfo_x())
         self.assertLess(self.app.cancel_sync_button.winfo_x(), self.app.gear_button.winfo_x())
+        for system_dark in (False, True):
+            with patch.object(preferences, "system_is_dark", return_value=system_dark):
+                self.change(theme="system")
+                self.assertEqual(
+                    self.app.audio_sync_button["background"], self.app.speech_button["background"],
+                )
 
     def test_cancellation_preserves_existing_output(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -328,8 +1259,8 @@ class InterfaceTests(unittest.TestCase):
             self.app.device_id.set("2")
         error.assert_called_once()
     def test_all_languages_switch_live_and_restore_english_without_changing_inputs(self):
-        self.app.portuguese_path.set("/source with spaces.srt")
-        self.app.english_path.set("/reference.srt")
+        self.app.source_path.set("/source with spaces.srt")
+        self.app.reference_path.set("/reference.srt")
         self.app.processing_device.set("AMD")
         for language in translations.LANGUAGES:
             with self.subTest(language=language):
@@ -338,8 +1269,8 @@ class InterfaceTests(unittest.TestCase):
                 self.assertEqual(self.app.speech_button["text"], translations.translate("Speech to text...", language))
                 self.assertEqual(self.app.settings_menu.entrycget(0, "label"), translations.translate("Language", language))
                 self.assertEqual(self.app.processing_device.get(), "AMD")
-                self.assertEqual(self.app.portuguese_path.get(), "/source with spaces.srt")
-                self.assertEqual(self.app.english_path.get(), "/reference.srt")
+                self.assertEqual(self.app.source_path.get(), "/source with spaces.srt")
+                self.assertEqual(self.app.reference_path.get(), "/reference.srt")
         self.change()
         self.assertEqual(self.app.sync_button["text"], "Analyze and synchronize")
         self.assertIn("Example 1:", self.app.instructions_text.get("1.0", "end"))
@@ -409,7 +1340,7 @@ class InterfaceTests(unittest.TestCase):
     def test_theme_and_language_preserve_manual_selection(self):
         source = Path(self.temporary.name) / "source.srt"
         source.touch()
-        self.app.portuguese_path.set(str(source))
+        self.app.source_path.set(str(source))
         cue = Cue(1000, 2000, "User dialogue, do not translate")
         selection = SyncSelection((cue,), (cue,), 1, 1, input_signatures((str(source),)))
         self.app.sync_selection = selection

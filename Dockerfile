@@ -4,9 +4,7 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 ARG CPU_ONLY=0
 ENV SUBTITLE_SYNC_CPU_ONLY=${CPU_ONLY}
-ENV APP_NAME="Subtitle Sync" \
-    APP_VERSION=1.0.0 \
-    LANG=C.UTF-8 \
+ENV LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
     USER_ID=99 \
     GROUP_ID=100 \
@@ -58,11 +56,14 @@ RUN python -m pip install --no-cache-dir -r /opt/subtitle-sync/requirements.txt 
        esac \
     && python -c 'import tkinter, fastembed, imageio_ffmpeg, onnxruntime, os; assert ("CUDAExecutionProvider" in onnxruntime.get_available_providers()) == (os.environ["SUBTITLE_SYNC_BUNDLED_CUDA"] == "1")'
 
+ENV APP_NAME="SubSync" \
+    APP_VERSION=1.1.0
 WORKDIR /opt/subtitle-sync
 COPY subtitle_sync_app.pyw subtitle_alignment.py sync_subtitles.py \
     gpu_runtime.py vulkan_embeddings.py manual_sync.py speech_to_text.py \
     speech_dialog.py ui_preferences.py ui_translations.py file_picker.py \
-    library_updates.py desktop_updates.py managed_updates.py README.md ./
+    library_updates.py desktop_updates.py managed_updates.py \
+    subtitle_sync_icon.png audio_sync.py audio_sync_dialog.py sync_report.py README.md ./
 RUN ln -s /config/gpu-runtimes .gpu-runtimes \
     && ln -s /config/speech-to-text .speech-to-text
 COPY --chmod=755 docker/startapp.sh /startapp.sh

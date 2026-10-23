@@ -244,14 +244,14 @@ class GuiDeviceTests(unittest.TestCase):
         diagnostics = {"matched_cues": 1, "match_percent": 100}
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "source.srt"
-            english = Path(directory) / "english.srt"
+            reference = Path(directory) / "reference.srt"
             output = Path(directory) / "output.srt"
             source.write_text(text, encoding="utf-8")
-            english.write_text(text, encoding="utf-8")
+            reference.write_text(text, encoding="utf-8")
             with patch.object(
                 alignment, "analyze_subtitles", return_value=([(1, 1.0)], diagnostics)
             ) as analyze:
-                self.app._sync_worker(None, source, english, output, 2000, 70, "NVIDIA", 1)
+                self.app._sync_worker(None, source, reference, output, 2000, 70, "NVIDIA", 1)
             self.assertEqual(analyze.call_args.kwargs["processing_device"], "NVIDIA")
             self.assertEqual(analyze.call_args.kwargs["device_id"], 1)
             self.assertIn("00:00:02,000 --> 00:00:03,000", output.read_text())
@@ -267,8 +267,8 @@ class GuiDeviceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "source.srt"
             source.write_text(text, encoding="utf-8")
-            self.app.portuguese_path.set(str(source))
-            self.app.english_path.set(str(source))
+            self.app.source_path.set(str(source))
+            self.app.reference_path.set(str(source))
             self.app.output_path.set(str(Path(directory) / "output.srt"))
             self.app.initial_time.set("00:00:01.000")
             cues = tuple(alignment.read_srt(source))

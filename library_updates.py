@@ -15,7 +15,7 @@ import uuid
 from pathlib import Path
 from typing import Callable
 
-PACKAGES = ("fastembed", "imageio-ffmpeg", "onnxruntime")
+PACKAGES = ("fastembed", "imageio-ffmpeg", "onnxruntime", "ffsubsync")
 ROOT = Path(__file__).resolve().parent
 DAY = 24 * 60 * 60
 
@@ -169,7 +169,7 @@ class LibraryManager:
                 self._run([str(executable), "-m", "pip", "check"])
                 self._run([
                     str(executable), "-c",
-                    "import tkinter, fastembed, onnxruntime, imageio_ffmpeg, runpy; "
+                    "import tkinter, fastembed, onnxruntime, imageio_ffmpeg, ffsubsync, runpy; "
                     "runpy.run_path('subtitle_sync_app.pyw'); "
                     "assert 'CPUExecutionProvider' in onnxruntime.get_available_providers()",
                 ])

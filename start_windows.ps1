@@ -82,6 +82,10 @@ try {
         & $venv -m pip install --disable-pip-version-check --no-deps -r requirements.txt
         if ($LASTEXITCODE -ne 0) { throw "Cannot install audio support." }
     }
+    if (-not (Test-Python $venv "import ffsubsync; from importlib.metadata import version; assert version('ffsubsync') == '0.5.1'")) {
+        & $venv -m pip install --disable-pip-version-check -r requirements.txt
+        if ($LASTEXITCODE -ne 0) { throw "Cannot install audio synchronization support." }
+    }
     if ($RestoreLibraries) {
         & $venv library_updates.py restore
         if ($LASTEXITCODE -ne 0) { throw "Could not restore previous libraries." }

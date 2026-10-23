@@ -16,6 +16,9 @@ COMMON = (
     "file_picker.py",
     "library_updates.py", "desktop_updates.py",
     "managed_updates.py",
+    "subtitle_sync_icon.png",
+    "audio_sync.py", "audio_sync_dialog.py",
+    "sync_report.py",
 )
 
 

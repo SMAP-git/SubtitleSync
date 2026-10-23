@@ -467,7 +467,7 @@ class AutomaticReferenceTests(unittest.TestCase):
         speech_popup.assert_called_once()
 
     def test_external_reference_bypasses_inspection(self):
-        self.app.english_path.set("external.srt")
+        self.app.reference_path.set("external.srt")
         with (
             patch.object(self.gui.filedialog, "askopenfilename", return_value=str(self.video)),
             patch.object(alignment, "list_subtitle_tracks") as inspect,
@@ -487,7 +487,7 @@ class AutomaticReferenceTests(unittest.TestCase):
         self.assertEqual(self.app.embedded_track[1], 7)
         source = Path(self.temporary.name) / "source.srt"
         source.write_text(SRT)
-        self.app.portuguese_path.set(str(source))
+        self.app.source_path.set(str(source))
         with (
             patch.object(alignment, "list_subtitle_tracks") as inspect,
             patch.object(alignment, "extract_reference_srt", return_value=alignment.parse_srt(SRT)) as extract,
@@ -530,7 +530,7 @@ class AutomaticReferenceTests(unittest.TestCase):
     def test_manual_pair_action_also_opens_speech_when_video_has_no_tracks(self):
         source = Path(self.temporary.name) / "source.srt"
         source.write_text(SRT)
-        self.app.portuguese_path.set(str(source))
+        self.app.source_path.set(str(source))
         with (
             patch.object(alignment, "list_subtitle_tracks", return_value=[]),
             patch.object(self.app, "_open_speech_to_text") as popup,
@@ -547,7 +547,7 @@ class SpeechDialogTests(unittest.TestCase):
         self.root.withdraw()
         self.app = load_gui().SubtitleSyncApp(self.root)
         self.dialog = speech_dialog.SpeechDialog(
-            self.root, "", (), lambda path: self.app.english_path.set(str(path)),
+            self.root, "", (), lambda path: self.app.reference_path.set(str(path)),
         )
 
     def tearDown(self):
@@ -609,7 +609,7 @@ class SpeechDialogTests(unittest.TestCase):
                     self.root.update()
                     time.sleep(0.01)
             self.assertFalse(self.dialog.busy)
-            self.assertEqual(self.app.english_path.get(), str(output))
+            self.assertEqual(self.app.reference_path.get(), str(output))
             self.assertIsNone(self.app.sync_selection)
             self.assertEqual(output.read_text(), SRT)
             self.assertIn("select matching cues", self.dialog.status.get())
@@ -626,14 +626,14 @@ class SpeechDialogTests(unittest.TestCase):
         worker.assert_not_called()
 
     def test_cancel_and_error_leave_reference_unchanged(self):
-        self.app.english_path.set("old-reference.srt")
+        self.app.reference_path.set("old-reference.srt")
         with patch.object(speech_dialog.messagebox, "showerror"):
             for kind in ("cancelled", "error"):
                 self.dialog.busy = True
                 self.dialog.events.put((kind, "Stopped before writing"))
                 self.dialog._poll()
                 self.assertFalse(self.dialog.busy)
-                self.assertEqual(self.app.english_path.get(), "old-reference.srt")
+                self.assertEqual(self.app.reference_path.get(), "old-reference.srt")
 
 
 if __name__ == "__main__":

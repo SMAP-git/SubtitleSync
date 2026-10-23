@@ -5,12 +5,46 @@ reference SRT, in the same or a different language, or an embedded SubRip track.
 Processing is local; the first analysis downloads the multilingual model.
 Original source and reference subtitles are kept unchanged.
 
+![SubSync v1.1.0 application window](docs/images/subsync-v1.1.0.png)
+
+## Downloads (v1.1.0)
+
+- [Windows x64 portable package](https://github.com/SMAP-git/SubtitleSync/releases/download/v1.1.0/SubtitleSync-1.1.0-windows-x64.zip)
+- [Linux x64 portable package](https://github.com/SMAP-git/SubtitleSync/releases/download/v1.1.0/SubtitleSync-1.1.0-linux-x64.tar.gz)
+- [CPU-only Docker image](https://github.com/SMAP-git/SubtitleSync/releases/download/v1.1.0/SubtitleSync-1.1.0-docker-amd64-cpu.tar.gz)
+- [CPU Docker image SHA-256](https://github.com/SMAP-git/SubtitleSync/releases/download/v1.1.0/SubtitleSync-1.1.0-docker-amd64-cpu.tar.gz.sha256)
+- [Windows/Linux portable SHA-256 sums](https://github.com/SMAP-git/SubtitleSync/releases/download/v1.1.0/SHA256SUMS.txt)
+- [GPU Docker image SHA-256](https://github.com/SMAP-git/SubtitleSync/releases/download/v1.1.0/SubtitleSync-1.1.0-docker-amd64.tar.gz.sha256)
+- [GPU Docker parts SHA-256 sums](https://github.com/SMAP-git/SubtitleSync/releases/download/v1.1.0/SubtitleSync-1.1.0-docker-amd64.parts.sha256)
+
+The full GPU Docker image is split into two release assets because of its size.
+Download [part 1](https://github.com/SMAP-git/SubtitleSync/releases/download/v1.1.0/SubtitleSync-1.1.0-docker-amd64.tar.gz.part01)
+and [part 2](https://github.com/SMAP-git/SubtitleSync/releases/download/v1.1.0/SubtitleSync-1.1.0-docker-amd64.tar.gz.part02),
+then verify the parts and reassemble the image:
+
+```sh
+sha256sum --check SubtitleSync-1.1.0-docker-amd64.parts.sha256
+cat SubtitleSync-1.1.0-docker-amd64.tar.gz.part01 \
+    SubtitleSync-1.1.0-docker-amd64.tar.gz.part02 \
+    > SubtitleSync-1.1.0-docker-amd64.tar.gz
+sha256sum --check SubtitleSync-1.1.0-docker-amd64.tar.gz.sha256
+gzip -dc SubtitleSync-1.1.0-docker-amd64.tar.gz | docker load
+```
+
 ## Top bar and interface settings
 
-The top bar shows the app name on the left. On the right are **Speech to text**,
+The desktop window/taskbar name is **SubSync**, using the app icon on Windows and
+Linux. On Linux, desktop startup registers a per-user `SubSync.desktop` entry in
+`$XDG_DATA_HOME/applications` (normally `~/.local/share/applications`) so the dock
+can associate the name and icon with the window. Restart the app after updating;
+an old pinned Tk launcher may need to be removed and SubSync pinned again.
+
+The top bar shows the app name on the left. On the right are **Sync to audio**,
+**Speech to text**,
 **Analyze and synchronize**, **Cancel**, the **gear menu** and the **version badge**, in that
-order. The secondary speech button and primary synchronization button follow the
-reference app's light/dark banner colors. The initial Subtitle Sync version is **v1.0.0**.
+order. Sync to audio uses the same secondary colors as Speech to text in every
+theme. The secondary speech button and primary synchronization button follow the
+reference app's light/dark banner colors. The current Subtitle Sync version is **v1.1.0**.
 The gear dropdown is right-aligned with its button; its submenus open to the left
 when the window is at the right screen edge, including when maximized.
 **Cancel** sits between Analyze and synchronize and the gear, with the same
@@ -44,13 +78,184 @@ Language, theme, processing-device choices and Whisper.cpp choices are saved aut
 `~/.config/SubtitleSync/settings.json`). Preference read/write failures are shown
 explicitly. Interface changes preserve selected files, devices and manual sync
 points.
-The main processing device, inference backend, adapter ID and Hearing-impaired
+The main processing device, inference backend, adapter ID, report checkbox and Hearing-impaired
 filter level are restored after
 restart. The speech window separately remembers the spoken language, model,
 device, backend, adapter ID and audio stream index, including across application
 restarts. Files and generated-output destinations are not saved. Restored hardware
 choices do not guarantee the same GPU is available: recheck adapter IDs if your
 hardware or driver configuration changes.
+
+### Optional synchronization report
+
+The **Report** box, to the right of **Processing device**, has a **Generate sync
+report** checkbox (off by default). Enable it before synchronizing or opening
+**Sync to audio...** to save a UTF-8 text report beside the resulting SRT.
+For example, `Episode.pt.synced.srt` or `Episode.pt.audio-synced.srt` produces
+`Episode.pt.sync.txt`; the filename's language suffix is preserved, not inferred.
+Repeating a synchronization replaces that output's previous report.
+
+The report records the input/output paths, method and settings, completion time,
+processing log/warnings and output cue timings. Reference-based synchronization
+also includes matching diagnostics and timing anchors. When the original external
+SRT is available, each cue includes its original timings and start/end shifts.
+For embedded audio-sync subtitles, original cue timings are unavailable to the
+report writer; the engine log records the available correction details instead.
+Matching coverage is **not** a timing-accuracy score: review the result.
+Reports contain local file paths and diagnostic logs; review them before sharing.
+If writing a report fails, the app explicitly reports the problem and keeps the
+successfully saved SRT. Disabling the checkbox does not delete an older report.
+
+The same box also offers **Sync to audio after analysis** (off by default).
+When checked, a valid video file is mandatory, even when a reference SRT is
+selected. After reference-based alignment, the app automatically aligns that
+temporary result to the video's **first audio track**, using CPU speech-activity
+matching with drift and section correction. For a different audio track, leave
+this option off and use the separate **Sync to audio...** window.
+Only the final combined result is saved to the selected output filename.
+Failure or cancellation in either stage leaves any existing output unchanged.
+The optional report covers both stages and the final cue timings.
+Out-of-order download/translation credits are excluded from dialogue matching
+without removing them or reordering the original subtitle file. Out-of-order
+dialogue still requires correction.
+
+### Automatic initial sync point
+
+Enable **Automatically select initial sync point** in the **Initial sync point**
+box, then click **Analyze and synchronize**. You do not need to select matching
+cues first. This option is off by default and remembered across restarts.
+It uses the selected multilingual embedding backend to find several distinct,
+consistent dialogue matches across the subtitles, excluding credits and
+hearing-impaired captions. It does not assume the first cues correspond.
+The chosen source/reference cue numbers and reference time appear after success
+and are included in the optional report.
+
+An external reference SRT is sufficient; video is only mandatory when using
+embedded reference subtitles or the separate automatic audio-pass option.
+With embedded references, the app still asks which subtitle track to use if
+there is more than one. Uncertain, ambiguous or insufficient matches stop the
+operation without replacing the output. Uncheck the option and select matching
+cues manually to proceed. Automatic selection is not a guarantee of accuracy:
+always review the result, especially across different edits of the video.
+
+### Folder mode
+
+The options row contains **SRT folder mode**, **Sync to audio folder mode**,
+**Initial sync point**, and **Hearing-impaired filter**. Click **Browse...** to
+the right of the path in SRT folder mode, choose a folder,
+then choose the source and reference languages detected from its SRT filenames.
+The box shows the editable folder path and source/reference language dropdowns,
+whose choices come from that folder's filename suffixes. Change either language
+directly in the box. Delete the path to return to single-file mode.
+You can also type a different folder path and press Enter or leave the field to
+refresh the available languages. Only files directly inside the selected folder
+are scanned.
+
+Language suffixes may be names or codes, for example `Episode.Portuguese.srt`
+and `Episode.en.srt`. Names such as Portuguese/English are normalized to `pt`/`en`;
+regional suffixes such as `pt-pt` and `pt-br` remain separate choices.
+Subtitles are paired by the same filename/title before the language suffix.
+Generated `.synced.srt` and `.audio-synced.srt` files are not used as new inputs.
+Unrecognized suffixes are not guessed.
+
+Folder mode requires and automatically enables automatic initial sync selection.
+Click **Analyze and synchronize** to process every source file in the selected
+language. Each output is saved next to its source as `Episode.pt.synced.srt`.
+Existing outputs are skipped, not overwritten. Missing references, ambiguous
+pairs and uncertain initial matches are recorded as failures, and processing
+continues with the next file. Cancel stops further processing and retains outputs
+already completed. The final scrollable report has one row per source file,
+including success, failure, skipped/cancelled status, output path and details.
+Optional per-file text reports follow the **Generate sync report** setting.
+If **Sync to audio after analysis** is enabled, each pair must have exactly one
+video with the same title in that folder; the first audio track is used.
+On mounted SMB/GVfs shares that do not support hard links, saving uses exclusive
+file creation instead. Existing files remain protected; the new output may be
+visible while it is being copied. Failed copies are removed.
+
+### Audio-only folder synchronization
+
+**Sync to audio folder mode**, immediately left of **Initial sync point**, has
+its own folder path, Browse button and **Sync** button. It does not require
+reference subtitles, language choices, an initial anchor or the embedding model.
+Each SRT is matched to a video with the same title (ignoring a recognized subtitle
+language suffix). All available subtitle languages are processed, as are SRTs
+without a language suffix. An existing `.synced.srt` can be processed too.
+For example, `Episode.pt.srt` and `Episode.en.srt` both match `Episode.mkv`.
+An exact filename-stem video match takes precedence over the language-stripped
+title. More than one matching video is treated as ambiguous, not guessed.
+
+Each output is saved beside its source with `.audio-synced.srt` in place of
+`.srt`; originals are unchanged. Generated `.audio-synced.srt` files are excluded
+from new inputs, and existing outputs are skipped. Processing uses the first
+audio track, CPU speech-activity matching, drift correction and section correction.
+Per-file failures do not stop the remaining files; Cancel stops further work.
+The final table includes successes, failures, skipped and cancelled files.
+**Generate sync report** also applies to this mode. The top-bar **Analyze and
+synchronize** button continues to use the SRT folder; use the button inside the
+audio folder box to run audio-only processing.
+
+Click the Relaxed–Strict slider to focus it, then use Left/Down or Right/Up to
+decrease/increase the hearing-impaired filter by one point (bounded to 0–100).
+
+## Synchronizing existing subtitles to audio
+
+Use **Sync to audio...** in the top bar, immediately left of **Speech to text**,
+when a video's subtitle
+track (or an external SRT) is early, late, or gradually drifts away from its audio.
+This is separate from **Speech to text** and does not need a correctly timed
+reference SRT or manually selected cue pairs.
+
+1. Choose the video/audio file, then click **Inspect tracks**.
+2. Select the correct audio track by its stream index and language.
+3. Select **Embedded subtitles** and a text subtitle track, or choose
+   **External SRT** and browse to the existing SRT.
+4. Leave **Correct gradual drift / frame-rate mismatch** enabled for timing-rate
+   differences. Leave **Correct section-by-section timing shifts** enabled when
+   the delay changes during the video. Disable both for a constant offset only.
+5. Choose a new `.srt` output path and click **Synchronize to audio**.
+
+After a successful save, the result is automatically selected in the main
+window's **Reference SRT** box. Errors and cancellation leave that selection unchanged.
+The audio-sync window includes an explicit **Close** button, including in Docker's
+browser desktop. During work it offers cancellation; close it after cancellation
+finishes. Like Speech to text, it remains a normal resizable window with its own
+window-manager decorations, rather than inheriting the main window's fullscreen rule.
+
+The CPU-only ffsubsync engine compares speech activity with subtitle timing.
+It does not recognize or translate words, download speech models, or use the GPU
+selected for semantic subtitle matching. FFmpeg reads the selected tracks,
+including the audio track's position on the video timeline. The offset search
+covers up to one minute in either direction with section correction enabled.
+Disable section correction for a global offset search up to ten minutes.
+
+External SRT wording, cue numbers, formatting, line breaks and encoding are
+preserved; only timestamps change. Embedded text tracks are extracted to SRT;
+format-specific styling from formats such as ASS may be lost in conversion.
+Image subtitles such as PGS/DVD require OCR first and are not selectable.
+The video and source subtitles are never overwritten. Replacing an existing
+output requires confirmation; cancellation or failure does not publish partial
+output. The result is a standalone SRT; the video is not remuxed or re-encoded.
+
+Section correction uses ffsubsync's penalized split alignment to find multiple
+timing offsets instead of applying one offset to the whole video. A split must
+improve speech overlap enough to avoid chasing every noisy cue. When the engine
+finds section changes, the log identifies the cue numbers to review. Speech
+activity alone may place a transition a few cues early or late; check several
+cues on both sides. Section correction is slower and uses more memory than
+global correction. Its bounded one-minute search also reduces the risk of matching
+unrelated scenes far away in the video.
+
+This corrects global offset, timing-rate problems and changing section delays,
+but cannot recover missing dialogue or guarantee arbitrary per-line alignment
+across different edits. Detected low-quality matches or
+lost/reordered cues are reported as errors instead of being saved. A successful
+match is not a guarantee of accuracy: review the beginning, middle and end in
+your player. Same-language speech and subtitles from the same video cut work best.
+
+Desktop launchers install `ffsubsync` automatically if it is missing. If a
+previously selected **Library updates** environment lacks it, install updated
+libraries or restore the base environment and restart with the desktop launcher.
 
 ## Starting the app
 
@@ -59,6 +264,31 @@ details list. Click **Name**, **Size** or **Modified** to sort; click again to
 reverse the order. Folders stay first. Use Up/Home or type a folder path and
 press Enter to navigate. This picker also works in the Docker browser desktop.
 Windows retains its native file dialogs.
+
+The main file controls use two rows: **Video** and **Reference SRT** on the first
+row; **Source SRT** and **Save synchronized SRT**
+are side by side on the second row. Source and reference are language-independent.
+Selecting a source SRT also searches its folder for the same filename with a
+different language suffix (for example, `Episode.pt-pt.srt` and `Episode.en.srt`,
+or `Episode.Portuguese.srt` and `Episode.English.srt`). A single match is offered
+in a themed chooser; multiple matches appear in its dropdown. Selecting a reference
+first offers matching source subtitles in the same way. Accepting a source also
+sets its default output filename. Cancel keeps the current selection.
+Matching names do not prove correct timing: choose a reference that
+is synchronized to the video. Only the final language suffix is varied; unrelated
+release names and generated `.synced` outputs are not suggested automatically.
+
+The About dialog includes the credit **developed by SMAP**.
+Below the processing controls, **Initial sync point** is on the left and
+**Hearing-impaired filter** is on the right.
+
+The Linux picker has a **Locations / mounted shares** selector listing mounted
+SMB/CIFS, NFS and desktop GVfs shares, along with `/mnt` and `/media`. Open the
+selector or click **Refresh** after mounting a share. You can also type any
+mounted path in the location bar. Mount and authenticate shares using the OS or
+desktop first; the app does not connect directly to `smb://` or `nfs://` URLs.
+Windows native dialogs support mapped drive letters and UNC paths such as
+`\\server\share\folder`. Network permissions and availability still apply.
 
 ### Portable releases (Windows and Linux x64)
 
@@ -231,8 +461,8 @@ new image, built with revised dependency pins. This feature does not change
 
 ### CPU-only image (recommended small download)
 
-For CPU users, choose `subtitle-sync:1.0.0-cpu`; for GPU users choose the full
-`subtitle-sync:1.0.0` image. The earlier slim variant is discontinued.
+For CPU users, choose `subtitle-sync:1.1.0-cpu`; for GPU users choose the full
+`subtitle-sync:1.1.0` image. The earlier slim variant is discontinued.
 
 CPU-only includes Python, Tkinter/browser desktop, CPU ONNX Runtime, FFmpeg and
 MKVToolNix. It excludes the optional Vulkan driver packages and NVIDIA CUDA/cuDNN
@@ -241,13 +471,13 @@ runtime installation is disabled. CPU models and the CPU Whisper executable
 still download on demand into persistent `/config`.
 
 ```sh
-docker build --platform linux/amd64 --build-arg WITH_CUDA=0 --build-arg CPU_ONLY=1 -t subtitle-sync:1.0.0-cpu .
-docker save subtitle-sync:1.0.0-cpu | gzip > SubtitleSync-1.0.0-docker-amd64-cpu.tar.gz
-gzip -dc SubtitleSync-1.0.0-docker-amd64-cpu.tar.gz | docker load
+docker build --platform linux/amd64 --build-arg WITH_CUDA=0 --build-arg CPU_ONLY=1 -t subtitle-sync:1.1.0-cpu .
+docker save subtitle-sync:1.1.0-cpu | gzip > SubtitleSync-1.1.0-docker-amd64-cpu.tar.gz
+gzip -dc SubtitleSync-1.1.0-docker-amd64-cpu.tar.gz | docker load
 ```
 
 Use [unraid/subtitle-sync-cpu.xml](unraid/subtitle-sync-cpu.xml), or change an
-existing container's Repository to `subtitle-sync:1.0.0-cpu` after loading it
+existing container's Repository to `subtitle-sync:1.1.0-cpu` after loading it
 and Apply. Remove GPU Device entries and `--gpus=all` / `--device=/dev/dri:/dev/dri`
 from Extra Parameters; retain `--shm-size=1g`. Keep existing `/config` and `/data`
 mappings. Saved GPU selections are ignored in this variant and CPU is selected.
@@ -285,8 +515,8 @@ Two images are available:
 
 | Image | NVIDIA libraries | Best for |
 |---|---|---|
-| `subtitle-sync:1.0.0` (full GPU) | Included | CPU, NVIDIA CUDA and AMD/Intel Vulkan GPU/APU users |
-| `subtitle-sync:1.0.0-cpu` | Not included; GPU disabled | CPU-only users wanting the smaller download |
+| `subtitle-sync:1.1.0` (full GPU) | Included | CPU, NVIDIA CUDA and AMD/Intel Vulkan GPU/APU users |
+| `subtitle-sync:1.1.0-cpu` | Not included; GPU disabled | CPU-only users wanting the smaller download |
 
 Both include the resizable/maximizable sortable file picker, synchronization
 Cancel button, cached-file download prompt fix, UTF-8 locale fix and single-pass Whisper
@@ -297,18 +527,18 @@ GPU use. Do not run two containers simultaneously against the same appdata.
 For the full image:
 
 ```sh
-docker build --platform linux/amd64 -t subtitle-sync:1.0.0 .
+docker build --platform linux/amd64 -t subtitle-sync:1.1.0 .
 # Optional: transfer the image to a different machine.
-docker save subtitle-sync:1.0.0 | gzip > SubtitleSync-1.0.0-docker-amd64.tar.gz
+docker save subtitle-sync:1.1.0 | gzip > SubtitleSync-1.1.0-docker-amd64.tar.gz
 ```
 
 On Unraid, load the image with
-`gzip -dc SubtitleSync-1.0.0-docker-amd64.tar.gz | docker load`.
+`gzip -dc SubtitleSync-1.1.0-docker-amd64.tar.gz | docker load`.
 Copy [unraid/subtitle-sync.xml](unraid/subtitle-sync.xml) into
 `/boot/config/plugins/dockerMan/templates-user/my-subtitle-sync.xml`, then use
 **Docker -> Add Container -> Template -> SubtitleSync**. Set your media share,
 appdata location, Web UI host port and optional GPU options before applying.
-The template refers to the **local** `subtitle-sync:1.0.0` image: it is not a
+The template refers to the **local** `subtitle-sync:1.1.0` image: it is not a
 published Docker Hub/GHCR image and cannot be pulled from a registry.
 To update it, rebuild/load the new image and recreate the container while keeping
 the same `/config` mapping; Unraid's registry update check cannot update a local image.

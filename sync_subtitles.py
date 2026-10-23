@@ -23,8 +23,12 @@ from __future__ import annotations
 import argparse
 import bisect
 import json
+import errno
+import logging
 import math
+import os
 import re
+import shutil
 import sys
 from pathlib import Path
 from typing import Any
@@ -35,6 +39,28 @@ TIMESTAMP = re.compile(
     r"(?P<arrow>\s+-->\s+)"
     r"(?P<end>\d{2,}:\d{2}:\d{2},\d{3})"
 )
+
+
+def publish_new_file(staged: Path, output: Path) -> None:
+    """Publish without overwriting, including shares that cannot create hard links."""
+    try:
+        os.link(staged, output)
+        return
+    except OSError as error:
+        if error.errno not in (errno.EPERM, errno.EOPNOTSUPP, errno.ENOSYS, errno.EXDEV):
+            raise
+        logging.info("Hard links unavailable for %s; using exclusive file creation.", output)
+    # Exclusive creation still rejects existing files and symlinks on network shares.
+    with staged.open("rb") as source:
+        destination = output.open("xb")
+        try:
+            with destination:
+                shutil.copyfileobj(source, destination)
+        except BaseException:
+            output.unlink()
+            raise
+
+
 def decode_srt(data: bytes) -> tuple[str, str, bool]:
     if data.startswith(b"\xef\xbb\xbf"):
         return data[3:].decode("utf-8"), "utf-8", True

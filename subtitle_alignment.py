@@ -381,6 +381,60 @@ def _model_cache() -> Path:
     return cache
 
 
+def _automatic_initial_pair(
+    source: Sequence[Cue], reference: Sequence[Cue],
+    vectors: dict[str, np.ndarray], strictness: int,
+    notify: Callable[[str], None],
+) -> tuple[int, int]:
+    def usable(cues: Sequence[Cue]) -> list[tuple[int, Cue]]:
+        return [
+            (index + 1, cue) for index, cue in enumerate(cues)
+            if not CREDIT.search(_clean_caption(cue.text))
+            and not _is_hearing_impaired_caption(cue.text, strictness)
+            and _alnum_length(_clean_caption(cue.text)) >= 12
+        ]
+
+    left, right = usable(source), usable(reference)
+    if len(left) < 3 or len(right) < 3:
+        raise ValueError("Cannot confidently find an automatic initial sync point. Select matching cues manually.")
+    # Bound the search memory and sample across the timeline, not just opening credits.
+    sampled = np.linspace(0, len(left) - 1, min(256, len(left)), dtype=int)
+    reference_vectors = np.asarray([vectors[_clean_caption(cue.text)] for _, cue in right])
+    matches: list[tuple[int, int, int, float]] = []
+    for position in sampled:
+        number, cue = left[int(position)]
+        notify(f"Finding automatic initial sync point: source cue {number}...")
+        scores = reference_vectors @ vectors[_clean_caption(cue.text)]
+        best = int(np.argmax(scores))
+        alternatives = np.delete(scores, best)
+        score = float(scores[best])
+        if score < 0.68 or score - float(np.max(alternatives)) < 0.08:
+            continue
+        reference_number, other = right[best]
+        matches.append((number, reference_number, other.start_ms - cue.start_ms, score))
+    groups = [
+        [other for other in matches if abs(other[2] - match[2]) <= 3000]
+        for match in matches
+    ]
+    groups.sort(key=len, reverse=True)
+    if groups:
+        group = sorted(groups[0])
+        increasing = all(b[1] > a[1] for a, b in zip(group, group[1:]))
+        competing = any(
+            len(other) >= max(3, len(group) * 0.8)
+            and abs(float(np.median([item[2] for item in other]))
+                    - float(np.median([item[2] for item in group]))) > 6000
+            for other in groups[1:]
+        )
+        if (len(group) >= 3 and increasing and not competing
+                and source[group[-1][0] - 1].start_ms - source[group[0][0] - 1].start_ms >= 10000):
+            selected = max(group, key=lambda match: match[3])
+            notify(f"Automatic initial sync point: source cue {selected[0]}, reference cue {selected[1]}; "
+                   f"{len(group)} consistent dialogue matches.")
+            return selected[0], selected[1]
+    raise ValueError("Cannot confidently find an automatic initial sync point. Select matching cues manually.")
+
+
 def analyze_subtitles(
     source: Sequence[Cue],
     reference: Sequence[Cue],
@@ -392,6 +446,7 @@ def analyze_subtitles(
     backend: str = "ONNX",
     source_anchor: int = 1,
     reference_anchor: int | None = None,
+    automatic_initial: bool = False,
 ) -> tuple[list[tuple[int, float]], dict[str, int | float]]:
     if not source or not reference:
         raise ValueError("Both source and reference subtitles must contain cues.")
@@ -406,17 +461,23 @@ def analyze_subtitles(
             isinstance(number, bool) or not isinstance(number, int) or not 1 <= number <= len(cues)
         ):
             raise ValueError(f"{label} anchor must be a valid 1-based cue number.")
-    if any(right.start_ms < left.start_ms for cues in (source, reference)
-           for left, right in zip(cues, cues[1:])):
-        raise ValueError("Subtitle cues must be in chronological order.")
+    for cues in (source, reference):
+        dialogue = [cue for cue in cues if not CREDIT.search(_clean_caption(cue.text))]
+        if any(right.start_ms < left.start_ms for left, right in zip(dialogue, dialogue[1:])):
+            raise ValueError("Subtitle dialogue cues must be in chronological order.")
     anchor_time = reference[reference_anchor - 1].start_ms if reference_anchor is not None else initial_audio_ms
     initial_offset_ms = anchor_time - source[source_anchor - 1].start_ms
 
     notify = progress or (lambda _message: None)
+    if any(right.start_ms < left.start_ms for cues in (source, reference)
+           for left, right in zip(cues, cues[1:])):
+        notify("Out-of-order credit cues excluded from dialogue matching; original cue order is preserved.")
     source_dialogue = [cue for cue in source
-                       if not _is_hearing_impaired_caption(cue.text, hearing_impaired_strictness)]
+                       if not CREDIT.search(_clean_caption(cue.text))
+                       and not _is_hearing_impaired_caption(cue.text, hearing_impaired_strictness)]
     reference_dialogue = [cue for cue in reference
-                          if not _is_hearing_impaired_caption(cue.text, hearing_impaired_strictness)]
+                          if not CREDIT.search(_clean_caption(cue.text))
+                          and not _is_hearing_impaired_caption(cue.text, hearing_impaired_strictness)]
     source_windows = _build_windows(source_dialogue, hearing_impaired_strictness)
     windows = _build_windows(reference_dialogue, hearing_impaired_strictness)
     if backend not in ("ONNX", "Vulkan"):
@@ -451,6 +512,12 @@ def analyze_subtitles(
         raise ValueError("The embedding backend returned empty dialogue vectors.")
     vectors /= norms
     by_text = dict(zip(texts, vectors))
+    if automatic_initial:
+        source_anchor, reference_anchor = _automatic_initial_pair(
+            source, reference, by_text, hearing_impaired_strictness, notify,
+        )
+        anchor_time = reference[reference_anchor - 1].start_ms
+        initial_offset_ms = anchor_time - source[source_anchor - 1].start_ms
     source_vectors = np.asarray([by_text[text] for text in source_texts])
     reference_vectors = np.asarray([by_text[text] for text in reference_texts])
     source_context_vectors = np.asarray([by_text[text] for text in source_contexts])
@@ -590,5 +657,7 @@ def analyze_subtitles(
         "match_percent": round(100 * len(monotonic) / max(1, len(source) - 1)),
         "source_anchor": source_anchor,
         "anchor_time_ms": anchor_time,
+        "reference_anchor": reference_anchor if reference_anchor is not None else 0,
+        "automatic_initial": int(automatic_initial),
     }
     return anchors, diagnostics

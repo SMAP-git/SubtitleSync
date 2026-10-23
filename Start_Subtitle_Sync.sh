@@ -65,6 +65,10 @@ if ! .venv-linux/bin/python -c 'import imageio_ffmpeg'; then
     .venv-linux/bin/python -m pip install --disable-pip-version-check --no-deps -r requirements.txt ||
         fail "Could not install bundled audio support."
 fi
+if ! .venv-linux/bin/python -c 'import ffsubsync; from importlib.metadata import version; assert version("ffsubsync") == "0.5.1"'; then
+    .venv-linux/bin/python -m pip install --disable-pip-version-check -r requirements.txt ||
+        fail "Could not install audio synchronization support."
+fi
 if [[ "${1:-}" == --restore-libraries ]]; then
     .venv-linux/bin/python library_updates.py restore
 fi

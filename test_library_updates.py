@@ -91,7 +91,7 @@ class LibraryManagerTests(unittest.TestCase):
         self.assertTrue(base.exists())
         self.assertEqual(commands.call_count, 4)
         install_command = commands.call_args_list[1].args[0]
-        self.assertEqual(install_command[-3:], list(updates.PACKAGES))
+        self.assertEqual(install_command[-len(updates.PACKAGES):], list(updates.PACKAGES))
         self.assertIn("--only-binary=:all:", install_command)
         self.assertIn("check", commands.call_args_list[2].args[0])
         self.assertIn("runpy.run_path('subtitle_sync_app.pyw')", commands.call_args_list[3].args[0][-1])

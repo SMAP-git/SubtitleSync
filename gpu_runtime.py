@@ -385,6 +385,7 @@ def worker(device: str, device_id: int) -> int:
                     processing_device=device, device_id=device_id,
                     source_anchor=request.get("source_anchor", 1),
                     reference_anchor=request.get("reference_anchor"),
+                    automatic_initial=request.get("automatic_initial", False),
                 )
                 result = {"anchors": anchors, "diagnostics": diagnostics}
             else:

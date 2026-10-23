@@ -8,6 +8,7 @@ import platform
 import queue
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -266,12 +267,14 @@ def prepare(backend: str, model: str, progress: Progress, cancel: threading.Even
 def run_process(
     command: list[str], progress: Progress, cancel: threading.Event,
     env: dict[str, str] | None = None,
+    *, operation: str = "Speech-to-text", terminate_tree: bool = False,
 ) -> str:
     check_cancelled(cancel)
     with subprocess.Popen(
         command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
         text=True, encoding="utf-8", errors="replace", env=env,
         creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+        start_new_session=terminate_tree and sys.platform != "win32",
     ) as process:
         events: queue.Queue[str | None] = queue.Queue()
 
@@ -298,16 +301,33 @@ def run_process(
                     progress(line)
                     tail = (tail + [line])[-400:]
             if process.wait() != 0:
-                raise ValueError("Speech-to-text process failed:\n" + "\n".join(tail[-35:]))
+                raise ValueError(f"{operation} process failed:\n" + "\n".join(tail[-35:]))
             check_cancelled(cancel)
             return "\n".join(tail)
         finally:
             if process.poll() is None:
-                process.terminate()
+                if terminate_tree and sys.platform == "win32":
+                    stopped = subprocess.run(
+                        ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                        capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW,
+                    )
+                    if stopped.returncode and process.poll() is None:
+                        raise RuntimeError(f"Cannot stop {operation} process:\n{stopped.stderr}")
+                elif terminate_tree:
+                    try:
+                        os.killpg(process.pid, signal.SIGTERM)
+                    except ProcessLookupError:
+                        if process.poll() is None:
+                            raise
+                else:
+                    process.terminate()
                 try:
                     process.wait(timeout=5)
                 except subprocess.TimeoutExpired:
-                    process.kill()
+                    if terminate_tree and sys.platform != "win32":
+                        os.killpg(process.pid, signal.SIGKILL)
+                    else:
+                        process.kill()
                     process.wait()
             reader.join(timeout=5)
 
