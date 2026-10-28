@@ -12,7 +12,9 @@ from typing import Callable
 
 import speech_to_text as speech
 from subtitle_alignment import PROCESSING_DEVICES
-from ui_preferences import auto_wrap, make_maximizable, load_choices, persist_choices, settings_path
+from ui_preferences import (
+    auto_wrap, make_maximizable, load_choices, persist_choices, settings_path, TranslatedVar,
+)
 
 
 class SpeechDialog(tk.Toplevel):
@@ -50,7 +52,10 @@ class SpeechDialog(tk.Toplevel):
                 "Cannot load speech settings", detail, parent=self,
             ))
         self.model_info = tk.StringVar()
-        self.status = tk.StringVar(value="Choose video/audio, spoken language and a Whisper model.")
+        interface = getattr(parent, "interface_preferences", None)
+        self.tr: Callable[[str], str] = interface.tr if interface is not None else (lambda text: text)
+        self.status = TranslatedVar(self, self.tr)
+        self.status.set("Choose video/audio, spoken language and a Whisper model.")
         self.protected_paths = protected_paths
         self.on_generated = on_generated
         self.busy = False
@@ -90,7 +95,7 @@ class SpeechDialog(tk.Toplevel):
         frame = ttk.Frame(self, padding=14)
         frame.pack(fill="both", expand=True)
         frame.columnconfigure(1, weight=1)
-        frame.rowconfigure(8, weight=1)
+        frame.rowconfigure(9, weight=1)
         for row, (label, value, command) in enumerate((
             ("Video / audio", self.video, self._choose_video),
             ("Generated reference SRT", self.output, self._choose_output),
@@ -122,17 +127,19 @@ class SpeechDialog(tk.Toplevel):
         self._update_model()
         auto_wrap(ttk.Label(
             frame, wraplength=800,
-            text=("CPU-only image: speech recognition runs on the CPU. Use the full image for GPU support.\n"
+            text=("CPU-only image: speech recognition runs on the CPU. Use the full image for GPU support."
             if speech.gpu_runtime.CPU_ONLY else
             "Recommended: CPU; NVIDIA via CUDA; AMD/Intel graphics and APUs via Vulkan "
             "(might not work with all cards). Uses your installed graphics driver; no administrator access or "
-            "driver installation. Adapter IDs are specific to Whisper: use Detect GPUs to see names.\n")
-            +
-            "Select the video's spoken language, not the source subtitle language. Output is a "
+            "driver installation. Adapter IDs are specific to Whisper: use Detect GPUs to see names."),
+        )).grid(row=4, column=0, columnspan=3, sticky="ew", pady=(8, 0))
+        auto_wrap(ttk.Label(
+            frame, wraplength=800,
+            text="Select the video's spoken language, not the source subtitle language. Output is a "
             "transcript, not an English translation. Choose the audio stream containing that language.",
-        )).grid(row=4, column=0, columnspan=3, sticky="ew", pady=8)
+        )).grid(row=5, column=0, columnspan=3, sticky="ew", pady=(0, 8))
         actions = ttk.Frame(frame)
-        actions.grid(row=5, column=0, columnspan=3, sticky="ew", pady=6)
+        actions.grid(row=6, column=0, columnspan=3, sticky="ew", pady=6)
         for label, operation in (
             ("Download runtime / verify model", "prepare"),
             ("Detect GPUs / APUs", "detect"),
@@ -144,10 +151,10 @@ class SpeechDialog(tk.Toplevel):
         self.cancel_button = ttk.Button(actions, text="Cancel", command=self._cancel, state="disabled")
         self.cancel_button.pack(side="right")
         self.progress = ttk.Progressbar(frame, mode="indeterminate")
-        self.progress.grid(row=6, column=0, columnspan=3, sticky="ew", pady=5)
-        auto_wrap(ttk.Label(frame, textvariable=self.status, wraplength=800)).grid(row=7, column=0, columnspan=3, sticky="ew", pady=5)
+        self.progress.grid(row=7, column=0, columnspan=3, sticky="ew", pady=5)
+        auto_wrap(ttk.Label(frame, textvariable=self.status, wraplength=800)).grid(row=8, column=0, columnspan=3, sticky="ew", pady=5)
         log_frame = ttk.Frame(frame)
-        log_frame.grid(row=8, column=0, columnspan=3, sticky="nsew")
+        log_frame.grid(row=9, column=0, columnspan=3, sticky="nsew")
         self.log = tk.Text(log_frame, height=12, wrap="word", state="disabled")
         scrollbar = ttk.Scrollbar(log_frame, command=self.log.yview)
         self.log.configure(yscrollcommand=scrollbar.set)
@@ -157,14 +164,14 @@ class SpeechDialog(tk.Toplevel):
             frame, text="After generation, review the transcript and select matching source/reference cues "
             "in the main window. Recognition can mishear speech or hallucinate during silence.",
             wraplength=800,
-        )).grid(row=9, column=0, columnspan=3, sticky="ew", pady=(8, 0))
+        )).grid(row=10, column=0, columnspan=3, sticky="ew", pady=(8, 0))
 
     def _update_model(self, _event: object = None) -> None:
         model = self.model.get()
-        self.model_info.set(
-            f"Model download: about {speech.MODELS[model].size_mb} MB; cached in .speech-to-text/models. "
+        self.model_info.set(self.tr(
+            "Model download: about {size} MB; cached in .speech-to-text/models. "
             "Larger models need more RAM/VRAM. Start with tiny/base on older GPUs/APUs."
-        )
+        ).format(size=speech.MODELS[model].size_mb))
 
     def _choose_video(self) -> None:
         chosen = filedialog.askopenfilename(parent=self, title="Choose video or audio")
@@ -205,13 +212,15 @@ class SpeechDialog(tk.Toplevel):
             return
         if missing and not messagebox.askokcancel(
             "Local speech-to-text setup",
-            "The following files need downloading:\n\n"
+            self.tr("The following files need downloading:") + "\n\n"
             + "\n".join(f"- {item}" for item in missing)
-            + ("\n\nThe CUDA runtime download can be up to 685 MB."
+            + ("\n\n" + self.tr("The CUDA runtime download can be up to 685 MB.")
                if backend == "CUDA" and any("runtime" in item for item in missing) else "")
-            + "\n\nDownloads are cached in this app's .speech-to-text folder. "
-            "Existing models are checksum-verified; damaged models are downloaded again. "
-            "Audio and subtitles stay on your computer.\n\nContinue?",
+            + "\n\n" + self.tr(
+                "Downloads are cached in this app's .speech-to-text folder. "
+                "Existing models are checksum-verified; damaged models are downloaded again. "
+                "Audio and subtitles stay on your computer."
+            ) + "\n\n" + self.tr("Continue?"),
             parent=self,
         ):
             return
@@ -280,7 +289,9 @@ class SpeechDialog(tk.Toplevel):
             if kind == "generated":
                 path, count = payload
                 self.on_generated(path)
-                self.status.set(f"Saved {count} cues. This SRT is now the reference; select matching cues next.")
+                self.status.set(self.tr(
+                    "Saved {count} cues. This SRT is now the reference; select matching cues next."
+                ).format(count=count))
                 self._append_log(f"Saved reference: {path}")
                 messagebox.showinfo("Reference generated", self.status.get(), parent=self)
             elif kind == "devices":

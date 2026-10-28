@@ -31,6 +31,7 @@ from audio_sync_dialog import AudioSyncDialog
 from ui_preferences import (
     APP_VERSION, InterfacePreferences, load_settings, save_settings, settings_path,
     load_choices, persist_choices, auto_wrap, make_maximizable,
+    TranslatedVar, install_message_translation,
 )
 from ui_translations import LANGUAGES, instructions as translated_instructions, translate
 
@@ -180,7 +181,10 @@ class SubtitleSyncApp:
         self.saved_filter_level = tk.StringVar(value="70")
         self.hearing_impaired_value = tk.StringVar(value="70 / 100")
         self.first_cue_text = tk.StringVar(value="Select matching dialogue cues in the two subtitles.")
-        self.status = tk.StringVar(value="Choose source and reference subtitles in any supported languages.")
+        self.status = TranslatedVar(
+            root, lambda text: self.interface.tr(text) if hasattr(self, "interface") else text,
+            "Choose source and reference subtitles in any supported languages.",
+        )
         self.sync_selection: SyncSelection | None = None
         self.folder_pair_dialog: CuePairDialog | None = None
         self.embedded_track: tuple[tuple[tuple[str, int, int], ...], int] | None = None
@@ -219,6 +223,7 @@ class SubtitleSyncApp:
             ))
         self.interface = InterfacePreferences(root, language, theme)
         root.interface_preferences = self.interface
+        install_message_translation(self.interface)
         self.interface.apply_theme()
         self.interface_language = tk.StringVar(value=language)
         self.interface_theme = tk.StringVar(value=theme)
@@ -368,7 +373,7 @@ class SubtitleSyncApp:
         self.folder_reference_combo = ttk.Combobox(self.folder_group, state="readonly", width=12)
         for row, (caption, combo) in enumerate((
             ("Source SRT (to synchronize)", self.folder_source_combo),
-            ("Refrence SRT", self.folder_reference_combo),
+            ("Reference SRT", self.folder_reference_combo),
         ), 1):
             ttk.Label(self.folder_group, text=caption).grid(row=row, column=0, sticky="w", pady=(6, 0))
             combo.grid(row=row, column=1, sticky="ew", pady=(6, 0))
@@ -706,7 +711,7 @@ class SubtitleSyncApp:
             self.interface.tr("About Subtitle Sync"),
             f"Subtitle Sync\nv{APP_VERSION}\n\n"
             + self.interface.tr("Synchronize subtitles locally, in your language.")
-            + "\n\ndeveloped by SMAP",
+            + "\n\n" + self.interface.tr("developed by SMAP"),
             parent=self.root,
         )
 
@@ -849,7 +854,7 @@ class SubtitleSyncApp:
             return
 
         window = tk.Toplevel(self.root)
-        window.title(f"{selected_device} GPU setup")
+        window.title(self.interface.tr("{device} GPU setup").format(device=selected_device))
         make_maximizable(window)
         window.grab_set()
         frame = ttk.Frame(window, padding=14)
@@ -857,8 +862,8 @@ class SubtitleSyncApp:
         frame.columnconfigure(0, weight=1)
         linux = gpu_runtime.sys.platform.startswith("linux")
         manual = linux and device == "AMD"
-        text = (
-            f"1. Install/update your {device} system graphics driver using the official guide below. "
+        text = self.interface.tr(
+            "1. Install/update your {device} system graphics driver using the official guide below. "
             "On Linux, follow the guide for your distribution. Administrator/root access "
             "and a reboot may be required. The app never installs system drivers.\n\n"
             "2. Install the app-local GPU runtime. Downloads may be large and require internet "
@@ -866,16 +871,16 @@ class SubtitleSyncApp:
             "3. Test the selected adapter. The first test may download the subtitle model. "
             "A successful test means inference works with the selected provider; individual "
             "unsupported operations may still run on CPU."
-        )
+        ).format(device=device)
         if manual:
-            text = (
+            text = self.interface.tr(
                 "AMD Linux: choose a setup stage, your GPU and your distribution below. "
                 "Both stages use official AMD software; they are not interchangeable backends. "
                 "System installation remains manual. The app does not run root commands."
             )
         if selected_device in gpu_runtime.INTEGRATED_DEVICES:
-            text += (
-                "\n\nIntegrated GPU/APU: use the adapter ID of the GPU built into your "
+            text += "\n\n" + self.interface.tr(
+                "Integrated GPU/APU: use the adapter ID of the GPU built into your "
                 "processor. This is GPU inference, not CPU mode. Driver support varies "
                 "by processor generation; having integrated graphics alone is not enough."
             )
@@ -898,7 +903,9 @@ class SubtitleSyncApp:
                 distribution.set(name)
                 version.set(release)
             except OSError as error:
-                detection_note = f"Could not detect Linux distribution: {error}. Enter it below."
+                detection_note = self.interface.tr(
+                    "Could not detect Linux distribution: {error}. Enter it below."
+                ).format(error=error)
             for row, label, variable, values, state in (
                 (1, "Setup stage", setup, gpu_runtime.AMD_SETUP_OPTIONS, "readonly"),
                 (2, "GPU model (select or type)", gpu,
@@ -1433,7 +1440,7 @@ class SubtitleSyncApp:
             self.folder_reference if self.folder_reference in languages else languages[1]
         ))
         for row, (label, variable) in enumerate((
-            ("Source SRT (to synchronize)", source), ("Refrence SRT", reference),
+            ("Source SRT (to synchronize)", source), ("Reference SRT", reference),
         )):
             ttk.Label(window, text=label).grid(row=row, column=0, padx=12, pady=8)
             ttk.Combobox(window, textvariable=variable, values=languages, state="readonly").grid(
@@ -1584,13 +1591,14 @@ class SubtitleSyncApp:
                     kind, payload = terminal
                     if kind == "success":
                         _, count, diagnostics = payload
-                        detail = f"{count} cues"
+                        tr = self.interface.tr
+                        detail = tr("{count} cues").format(count=count)
                         if "match_percent" in diagnostics:
-                            detail += f"; {diagnostics['match_percent']}% matched"
+                            detail += "; " + tr("{percent}% matched").format(percent=diagnostics["match_percent"])
                         if "report_path" in diagnostics:
                             detail += f"; {diagnostics['report_path']}"
                         if "report_error" in diagnostics:
-                            detail += f"; report error: {diagnostics['report_error']}"
+                            detail += "; " + tr("Report error: {error}").format(error=diagnostics["report_error"])
                         rows.append((str(source), "Success", str(output), detail))
                     else:
                         rows.append((str(source), "Cancelled" if kind == "cancelled" else "Failed",
@@ -1658,7 +1666,7 @@ class SubtitleSyncApp:
 
         def progress(message: str) -> None:
             log.append(message)
-            self.messages.put(("status", f"{source.name}: {message}"))
+            self.messages.put(("status", f"{source.name}: {self.interface.tr(message)}"))
 
         try:
             if video is None:
@@ -1666,7 +1674,7 @@ class SubtitleSyncApp:
             original = sync_subtitles.decode_srt(source.read_bytes())[0] if generate_report else None
             tracks = audio_sync.inspect_tracks(video, progress, self.sync_cancel)
             track = next(track for track in tracks if track.kind == "Audio")
-            progress(f"Synchronizing using the first audio track: {track.label}")
+            progress(self.interface.tr("Synchronizing using the first audio track: {track}").format(track=track.label))
             count = audio_sync.synchronize(
                 video, source, output, track.index, None, True, progress, self.sync_cancel,
                 fix_sections=True,
@@ -1852,8 +1860,11 @@ class SubtitleSyncApp:
             self.sync_selection = SyncSelection(source, reference, left, right, signatures)
             self.initial_time.set(format_time(reference[right - 1].start_ms))
             self.first_cue_text.set(
-                f"Source cue {left}: {source[left - 1].text[:120]}\n"
-                f"Reference cue {right}: {reference[right - 1].text[:120]}"
+                self.interface.tr("Source cue {number}: {text}").format(
+                    number=left, text=source[left - 1].text[:120],
+                ) + "\n" + self.interface.tr("Reference cue {number}: {text}").format(
+                    number=right, text=reference[right - 1].text[:120],
+                )
             )
             self.status.set("Manual initial sync point selected. Ready to analyze dialogue context.")
 
@@ -1973,7 +1984,7 @@ class SubtitleSyncApp:
             return
         if output.exists() and not messagebox.askyesno(
             "Replace output?",
-            f"This file already exists. Replace it?\n\n{output}",
+            self.interface.tr("This file already exists. Replace it?\n\n{path}").format(path=output),
             parent=self.root,
         ):
             return
@@ -2150,7 +2161,9 @@ class SubtitleSyncApp:
                     )
                     tracks = audio_sync.inspect_tracks(video, progress, self.sync_cancel)
                     audio_track = next(track for track in tracks if track.kind == "Audio")
-                    progress(f"Automatic audio synchronization using the first audio track: {audio_track.label}")
+                    progress(self.interface.tr(
+                    "Automatic audio synchronization using the first audio track: {track}"
+                ).format(track=audio_track.label))
                     audio_result = Path(staging_directory) / "audio-result.srt"
                     audio_sync.synchronize(
                         video, staged_path, audio_result, audio_track.index, None, True,
@@ -2165,7 +2178,9 @@ class SubtitleSyncApp:
                     synced_text, _, _ = sync_subtitles.decode_srt(audio_result.read_bytes())
                     audio_result.replace(staged_path)
                 if final_offset_ms:
-                    progress(f"Applying final subtitle offset: {final_offset_ms:+d} ms.")
+                    progress(self.interface.tr("Applying final subtitle offset: {offset} ms.").format(
+                        offset=f"{final_offset_ms:+d}",
+                    ))
                     synced_text = sync_subtitles.shift_srt(synced_text, final_offset_ms)
                     encoded = synced_text.encode(encoding)
                     if had_bom:
@@ -2265,8 +2280,11 @@ class SubtitleSyncApp:
                     self.sync_selection = SyncSelection(tuple(source), tuple(reference), left, right, signatures)
                     self.initial_time.set(format_time(reference[right - 1].start_ms))
                     self.first_cue_text.set(
-                        f"Source cue {left}: {source[left - 1].text[:120]}\n"
-                        f"Reference cue {right}: {reference[right - 1].text[:120]}"
+                        self.interface.tr("Source cue {number}: {text}").format(
+                            number=left, text=source[left - 1].text[:120],
+                        ) + "\n" + self.interface.tr("Reference cue {number}: {text}").format(
+                            number=right, text=reference[right - 1].text[:120],
+                        )
                     )
                 elif kind == "error":
                     self._finish()
@@ -2275,7 +2293,7 @@ class SubtitleSyncApp:
                 elif kind == "success":
                     output, cue_count, diagnostics = payload
                     self._finish()
-                    self.status.set(f"Saved synchronized subtitles: {output}")
+                    self.status.set(self.interface.tr("Saved synchronized subtitles: {path}").format(path=output))
                     report_message = ""
                     if "report_path" in diagnostics:
                         report_message = "\n\n" + self.interface.tr("Report saved: {path}").format(
@@ -2290,10 +2308,14 @@ class SubtitleSyncApp:
                         )
                     messagebox.showinfo(
                         "Synchronization complete",
-                        f"Matched {diagnostics['matched_cues']} dialogue cues "
-                        f"({diagnostics['match_percent']}%) automatically.\n"
-                        f"Synchronized {cue_count} subtitle cues and saved:\n{output}\n\n"
-                        "The source and reference subtitles were not changed." + report_message,
+                        self.interface.tr(
+                            "Matched {matched} dialogue cues ({percent}%) automatically.\n"
+                            "Synchronized {count} subtitle cues and saved:\n{path}\n\n"
+                            "The source and reference subtitles were not changed."
+                        ).format(
+                            matched=diagnostics["matched_cues"], percent=diagnostics["match_percent"],
+                            count=cue_count, path=output,
+                        ) + report_message,
                         parent=self.root,
                     )
         except queue.Empty:

@@ -10,12 +10,51 @@ import subprocess
 import sys
 import tkinter as tk
 from pathlib import Path
-from tkinter import ttk
+from tkinter import messagebox, ttk
+from typing import Callable
 
 from ui_translations import LANGUAGES, translate
 
-APP_VERSION = "1.1.1"
+APP_VERSION = "1.1.2"
 THEMES = ("system", "light", "dark")
+MESSAGE_FUNCTIONS = (
+    "showinfo", "showwarning", "showerror", "askquestion",
+    "askokcancel", "askyesno", "askyesnocancel", "askretrycancel",
+)
+_message_interface: InterfacePreferences | None = None
+
+
+class TranslatedVar(tk.StringVar):
+    """Status text variable that shows catalogued interface messages in the current language."""
+
+    def __init__(self, master: tk.Misc | None, translate_text: Callable[[str], str], value: str = "") -> None:
+        self._translate_text = translate_text
+        super().__init__(master, value=value)
+
+    def set(self, value: object) -> None:
+        super().set(self._translate_text(str(value)))
+
+
+def install_message_translation(interface: InterfacePreferences) -> None:
+    """Translate catalogued message-box titles and messages; other text is shown unchanged."""
+    global _message_interface
+    _message_interface = interface
+    for name in MESSAGE_FUNCTIONS:
+        original = getattr(messagebox, name)
+        if getattr(original, "_subsync_original", None) is not None:
+            continue
+
+        def translated(title: object = None, message: object = None, *args: object,
+                       _original: Callable[..., object] = original, **options: object) -> object:
+            if _message_interface is not None:
+                if isinstance(title, str):
+                    title = _message_interface.tr(title)
+                if isinstance(message, str):
+                    message = _message_interface.tr(message)
+            return _original(title, message, *args, **options)
+
+        translated._subsync_original = original
+        setattr(messagebox, name, translated)
 
 
 def make_maximizable(window: tk.Toplevel) -> None:

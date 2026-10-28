@@ -1,5 +1,8 @@
+import ast
 import json
 import os
+import re
+import string
 import tempfile
 import tkinter as tk
 import unittest
@@ -22,7 +25,91 @@ def _descendants(widget):
         yield from _descendants(child)
 
 
+GUI_MODULES = (
+    "subtitle_sync_app.pyw", "speech_dialog.py", "audio_sync_dialog.py", "manual_sync.py",
+    "desktop_updates.py", "file_picker.py",
+)
+UNTRANSLATED_NAMES = {"SubSync", "Subtitle Sync"}
+MESSAGE_BOXES = set(preferences.MESSAGE_FUNCTIONS)
+STATUS_VARIABLES = {"status", "summary", "first_cue_text"}
+
+
+def _call_name(function):
+    if isinstance(function, ast.Attribute):
+        return function.attr
+    return function.id if isinstance(function, ast.Name) else ""
+
+
+def interface_strings():
+    """Static user-visible strings from GUI modules: captions, titles, messages and status lines."""
+    found = {}
+    root = Path(__file__).resolve().parent
+    for module in GUI_MODULES:
+        tree = ast.parse((root / module).read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            candidates = []
+            if isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call):
+                if _call_name(node.exc.func) in {"ValueError", "RuntimeError", "OSError"}:
+                    candidates += node.exc.args[:1]
+            if not isinstance(node, ast.Call):
+                for candidate in candidates:
+                    if isinstance(candidate, ast.Constant) and isinstance(candidate.value, str):
+                        found.setdefault(candidate.value, f"{module}:{node.lineno}")
+                continue
+            name = _call_name(node.func)
+            candidates += [keyword.value for keyword in node.keywords if keyword.arg in {"text", "label"}]
+            if name in {"tr", "translate", "title", "progress"}:
+                candidates += node.args[:1]
+            if name in MESSAGE_BOXES:
+                candidates += node.args[:2]
+                candidates += [keyword.value for keyword in node.keywords if keyword.arg in {"title", "message"}]
+            if name == "TranslatedVar":
+                candidates += node.args[2:3]
+            if name == "set" and isinstance(node.func, ast.Attribute):
+                target = node.func.value
+                if isinstance(target, ast.Subscript):
+                    target = target.value
+                if _call_name(target) in STATUS_VARIABLES | {"previews"}:
+                    candidates += node.args[:1]
+            if name == "put" and node.args and isinstance(node.args[0], ast.Tuple):
+                items = node.args[0].elts
+                if len(items) == 2 and isinstance(items[0], ast.Constant) and items[0].value == "status":
+                    candidates.append(items[1])
+            pending = list(candidates)
+            while pending:
+                value = pending.pop()
+                if isinstance(value, ast.IfExp):
+                    pending += [value.body, value.orelse]
+                elif isinstance(value, ast.BinOp) and isinstance(value.op, ast.Add):
+                    # Concatenated literal pieces must be wrapped in tr(); bare ones never match a key.
+                    pending += [value.left, value.right]
+                elif isinstance(value, ast.Constant) and isinstance(value.value, str):
+                    found.setdefault(value.value, f"{module}:{node.lineno}")
+    return {
+        text: location for text, location in found.items()
+        if any(character.isalpha() for character in text) and text not in UNTRANSLATED_NAMES
+    }
+
+
 class PreferencesTests(unittest.TestCase):
+    def test_every_static_interface_string_is_translated_in_every_language(self):
+        def catalogued(text):
+            numbered = re.fullmatch(r"\d+\.\s+(.+)", text, re.S)
+            return text in translations.TRANSLATIONS or bool(numbered and numbered[1] in translations.TRANSLATIONS)
+
+        strings = interface_strings()
+        self.assertGreater(len(strings), 200)
+        missing = sorted(f"{location}: {text!r}" for text, location in strings.items() if not catalogued(text))
+        self.assertEqual(missing, [], "Untranslated interface strings:\n" + "\n".join(missing))
+        formatter = string.Formatter()
+        for source, values in translations.TRANSLATIONS.items():
+            fields = sorted(name for _, name, _, _ in formatter.parse(source) if name is not None)
+            for value in values:
+                with self.subTest(source=source[:60], value=value[:60]):
+                    self.assertEqual(
+                        sorted(name for _, name, _, _ in formatter.parse(value) if name is not None), fields,
+                    )
+
     def test_catalogues_cover_the_reference_apps_nineteen_languages(self):
         self.assertEqual(set(translations.LANGUAGES), {
             "en", "de", "el", "et", "fr", "hi", "hu", "it", "ja", "ko", "nl",
@@ -1492,6 +1579,31 @@ class InterfaceTests(unittest.TestCase):
         ):
             self.app.device_id.set("2")
         error.assert_called_once()
+    def test_open_windows_show_only_catalogued_captions(self):
+        cues = (Cue(1000, 2000, "Hello"),)
+        CuePairDialog(self.root, cues, cues, lambda _left, _right: None)
+        self.app._show_folder_report([("/a.srt", "Success", "/a.synced.srt", "")])
+        speech_dialog.SpeechDialog(self.root, "", (), lambda _path: None)
+        self.gui.AudioSyncDialog(self.root)
+        self.change("de")
+        ignored = UNTRANSLATED_NAMES | {f"v{preferences.APP_VERSION}"}
+        captions = set()
+        for widget in [self.root, *_descendants(self.root)]:
+            captions.update(
+                value for value in (
+                    getattr(widget, "_original_caption", None), getattr(widget, "_original_title", None),
+                    *getattr(widget, "_original_headings", {}).values(),
+                ) if value
+            )
+        missing = sorted(
+            caption for caption in captions
+            if any(character.isalpha() for character in caption) and caption not in ignored
+            and caption not in translations.TRANSLATIONS and not caption.startswith("Success: ")
+        )
+        self.assertEqual(missing, [])
+        german_speech = speech_dialog.SpeechDialog(self.root, "", (), lambda _path: None)
+        self.assertTrue(german_speech.model_info.get().startswith("Modell"), german_speech.model_info.get())
+
     def test_all_languages_switch_live_and_restore_english_without_changing_inputs(self):
         self.app.source_path.set("/source with spaces.srt")
         self.app.reference_path.set("/reference.srt")

@@ -1,6 +1,6 @@
 services:
   subtitle-sync:
-    image: subtitle-sync:1.1.1-cpu
+    image: subtitle-sync:1.1.2-cpu
     build:
       args:
         WITH_CUDA: "0"

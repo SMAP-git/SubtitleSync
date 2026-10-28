@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Container version="2">
   <Name>SubtitleSync</Name>
-  <Repository>subtitle-sync:1.1.1</Repository>
+  <Repository>subtitle-sync:1.1.2</Repository>
   <Network>bridge</Network>
   <MyIP/>
   <Shell>bash</Shell>

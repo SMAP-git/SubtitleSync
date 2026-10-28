@@ -57,7 +57,7 @@ RUN python -m pip install --no-cache-dir -r /opt/subtitle-sync/requirements.txt 
     && python -c 'import tkinter, fastembed, imageio_ffmpeg, onnxruntime, os; assert ("CUDAExecutionProvider" in onnxruntime.get_available_providers()) == (os.environ["SUBTITLE_SYNC_BUNDLED_CUDA"] == "1")'
 
 ENV APP_NAME="SubSync" \
-    APP_VERSION=1.1.1
+    APP_VERSION=1.1.2
 WORKDIR /opt/subtitle-sync
 COPY subtitle_sync_app.pyw subtitle_alignment.py sync_subtitles.py \
     gpu_runtime.py vulkan_embeddings.py manual_sync.py speech_to_text.py \

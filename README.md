@@ -7,30 +7,30 @@ Original source and reference subtitles are kept unchanged.
 
 ![SubSync v1.1.1 application window](docs/images/subsync-v1.1.1.png)
 
-## Published downloads (v1.1.1)
+## Published downloads (v1.1.2)
 
-- [Windows x64 portable package](https://github.com/SMAP-git/SubtitleSync/releases/download/v1.1.1/SubtitleSync-1.1.1-windows-x64.zip)
-- [Linux x64 portable package](https://github.com/SMAP-git/SubtitleSync/releases/download/v1.1.1/SubtitleSync-1.1.1-linux-x64.tar.gz)
-- [Windows/Linux portable SHA-256 sums](https://github.com/SMAP-git/SubtitleSync/releases/download/v1.1.1/SHA256SUMS.txt)
-- [GPU Docker image SHA-256](https://github.com/SMAP-git/SubtitleSync/releases/download/v1.1.1/SubtitleSync-1.1.1-docker-amd64.tar.gz.sha256)
-- [GPU Docker parts SHA-256 sums](https://github.com/SMAP-git/SubtitleSync/releases/download/v1.1.1/SubtitleSync-1.1.1-docker-amd64.parts.sha256)
+- [Windows x64 portable package](https://github.com/SMAP-git/SubtitleSync/releases/download/v1.1.2/SubtitleSync-1.1.2-windows-x64.zip)
+- [Linux x64 portable package](https://github.com/SMAP-git/SubtitleSync/releases/download/v1.1.2/SubtitleSync-1.1.2-linux-x64.tar.gz)
+- [Windows/Linux portable SHA-256 sums](https://github.com/SMAP-git/SubtitleSync/releases/download/v1.1.2/SHA256SUMS.txt)
+- [GPU Docker image SHA-256](https://github.com/SMAP-git/SubtitleSync/releases/download/v1.1.2/SubtitleSync-1.1.2-docker-amd64.tar.gz.sha256)
+- [GPU Docker parts SHA-256 sums](https://github.com/SMAP-git/SubtitleSync/releases/download/v1.1.2/SubtitleSync-1.1.2-docker-amd64.parts.sha256)
 
-The v1.1.1 release does not include a prebuilt CPU-only Docker image; build
-`subtitle-sync:1.1.1-cpu` locally as described in the Docker section, or use the
+The v1.1.2 release does not include a prebuilt CPU-only Docker image; build
+`subtitle-sync:1.1.2-cpu` locally as described in the Docker section, or use the
 full GPU image, which also runs on CPU.
 
 The full GPU Docker image is split into two release assets because of its size.
-Download [part 1](https://github.com/SMAP-git/SubtitleSync/releases/download/v1.1.1/SubtitleSync-1.1.1-docker-amd64.tar.gz.part01)
-and [part 2](https://github.com/SMAP-git/SubtitleSync/releases/download/v1.1.1/SubtitleSync-1.1.1-docker-amd64.tar.gz.part02),
+Download [part 1](https://github.com/SMAP-git/SubtitleSync/releases/download/v1.1.2/SubtitleSync-1.1.2-docker-amd64.tar.gz.part01)
+and [part 2](https://github.com/SMAP-git/SubtitleSync/releases/download/v1.1.2/SubtitleSync-1.1.2-docker-amd64.tar.gz.part02),
 then verify the parts and reassemble the image:
 
 ```sh
-sha256sum --check SubtitleSync-1.1.1-docker-amd64.parts.sha256
-cat SubtitleSync-1.1.1-docker-amd64.tar.gz.part01 \
-    SubtitleSync-1.1.1-docker-amd64.tar.gz.part02 \
-    > SubtitleSync-1.1.1-docker-amd64.tar.gz
-sha256sum --check SubtitleSync-1.1.1-docker-amd64.tar.gz.sha256
-gzip -dc SubtitleSync-1.1.1-docker-amd64.tar.gz | docker load
+sha256sum --check SubtitleSync-1.1.2-docker-amd64.parts.sha256
+cat SubtitleSync-1.1.2-docker-amd64.tar.gz.part01 \
+    SubtitleSync-1.1.2-docker-amd64.tar.gz.part02 \
+    > SubtitleSync-1.1.2-docker-amd64.tar.gz
+sha256sum --check SubtitleSync-1.1.2-docker-amd64.tar.gz.sha256
+gzip -dc SubtitleSync-1.1.2-docker-amd64.tar.gz | docker load
 ```
 
 ## Top bar and interface settings
@@ -46,7 +46,7 @@ The top bar shows the app name on the left. On the right are **Sync to audio**,
 **Analyze and synchronize**, **Cancel**, the **gear menu** and the **version badge**, in that
 order. Sync to audio uses the same secondary colors as Speech to text in every
 theme. The secondary speech button and primary synchronization button follow the
-reference app's light/dark banner colors. The current Subtitle Sync version is **v1.1.1**.
+reference app's light/dark banner colors. The current Subtitle Sync version is **v1.1.2**.
 The gear dropdown is right-aligned with its button; its submenus open to the left
 when the window is at the right screen edge, including when maximized.
 **Cancel** sits between Analyze and synchronize and the gear, with the same
@@ -526,8 +526,8 @@ new image, built with revised dependency pins. This feature does not change
 
 ### CPU-only image (recommended small download)
 
-For CPU users, build `subtitle-sync:1.1.1-cpu`; for GPU users build the full
-`subtitle-sync:1.1.1` image. The earlier slim variant is discontinued.
+For CPU users, build `subtitle-sync:1.1.2-cpu`; for GPU users build the full
+`subtitle-sync:1.1.2` image. The earlier slim variant is discontinued.
 
 CPU-only includes Python, Tkinter/browser desktop, CPU ONNX Runtime, FFmpeg and
 MKVToolNix. It excludes the optional Vulkan driver packages and NVIDIA CUDA/cuDNN
@@ -536,13 +536,13 @@ runtime installation is disabled. CPU models and the CPU Whisper executable
 still download on demand into persistent `/config`.
 
 ```sh
-docker build --platform linux/amd64 --build-arg WITH_CUDA=0 --build-arg CPU_ONLY=1 -t subtitle-sync:1.1.1-cpu .
-docker save subtitle-sync:1.1.1-cpu | gzip > SubtitleSync-1.1.1-docker-amd64-cpu.tar.gz
-gzip -dc SubtitleSync-1.1.1-docker-amd64-cpu.tar.gz | docker load
+docker build --platform linux/amd64 --build-arg WITH_CUDA=0 --build-arg CPU_ONLY=1 -t subtitle-sync:1.1.2-cpu .
+docker save subtitle-sync:1.1.2-cpu | gzip > SubtitleSync-1.1.2-docker-amd64-cpu.tar.gz
+gzip -dc SubtitleSync-1.1.2-docker-amd64-cpu.tar.gz | docker load
 ```
 
 Use [unraid/subtitle-sync-cpu.xml](unraid/subtitle-sync-cpu.xml), or change an
-existing container's Repository to `subtitle-sync:1.1.1-cpu` after loading it
+existing container's Repository to `subtitle-sync:1.1.2-cpu` after loading it
 and Apply. Remove GPU Device entries and `--gpus=all` / `--device=/dev/dri:/dev/dri`
 from Extra Parameters; retain `--shm-size=1g`. Keep existing `/config` and `/data`
 mappings. Saved GPU selections are ignored in this variant and CPU is selected.
@@ -580,8 +580,8 @@ Two images are available:
 
 | Image | NVIDIA libraries | Best for |
 |---|---|---|
-| `subtitle-sync:1.1.1` (full GPU) | Included | CPU, NVIDIA CUDA and AMD/Intel Vulkan GPU/APU users |
-| `subtitle-sync:1.1.1-cpu` | Not included; GPU disabled | CPU-only users wanting the smaller build |
+| `subtitle-sync:1.1.2` (full GPU) | Included | CPU, NVIDIA CUDA and AMD/Intel Vulkan GPU/APU users |
+| `subtitle-sync:1.1.2-cpu` | Not included; GPU disabled | CPU-only users wanting the smaller build |
 
 Both include the resizable/maximizable sortable file picker, synchronization
 Cancel button, cached-file download prompt fix, UTF-8 locale fix and single-pass Whisper
@@ -592,18 +592,18 @@ GPU use. Do not run two containers simultaneously against the same appdata.
 For the full image:
 
 ```sh
-docker build --platform linux/amd64 -t subtitle-sync:1.1.1 .
+docker build --platform linux/amd64 -t subtitle-sync:1.1.2 .
 # Optional: transfer the image to a different machine.
-docker save subtitle-sync:1.1.1 | gzip > SubtitleSync-1.1.1-docker-amd64.tar.gz
+docker save subtitle-sync:1.1.2 | gzip > SubtitleSync-1.1.2-docker-amd64.tar.gz
 ```
 
 On Unraid, load the image with
-`gzip -dc SubtitleSync-1.1.1-docker-amd64.tar.gz | docker load`.
+`gzip -dc SubtitleSync-1.1.2-docker-amd64.tar.gz | docker load`.
 Copy [unraid/subtitle-sync.xml](unraid/subtitle-sync.xml) into
 `/boot/config/plugins/dockerMan/templates-user/my-subtitle-sync.xml`, then use
 **Docker -> Add Container -> Template -> SubtitleSync**. Set your media share,
 appdata location, Web UI host port and optional GPU options before applying.
-The template refers to the **local** `subtitle-sync:1.1.1` image: it is not a
+The template refers to the **local** `subtitle-sync:1.1.2` image: it is not a
 published Docker Hub/GHCR image and cannot be pulled from a registry.
 To update it, rebuild/load the new image and recreate the container while keeping
 the same `/config` mapping; Unraid's registry update check cannot update a local image.

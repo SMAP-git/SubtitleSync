@@ -168,7 +168,10 @@ class DesktopUpdates:
                 versions.append(f"{name} {importlib.metadata.version(name)}")
             except importlib.metadata.PackageNotFoundError:
                 versions.append(f"{name}: not installed")
-        ttk.Label(frame, text="Running: " + ", ".join(versions), wraplength=700).pack(fill="x", pady=8)
+        ttk.Label(
+            frame, text=self.app.interface.tr("Running: {versions}").format(versions=", ".join(versions)),
+            wraplength=700,
+        ).pack(fill="x", pady=8)
         self.text = tk.Text(frame, height=8, wrap="word")
         self.text.pack(fill="both", expand=True)
         buttons = ttk.Frame(frame)

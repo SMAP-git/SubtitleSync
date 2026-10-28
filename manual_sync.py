@@ -38,6 +38,8 @@ class CuePairDialog:
         self, parent: tk.Tk, source: tuple[Cue, ...], reference: tuple[Cue, ...],
         accept: Callable[[int, int], None],
     ) -> None:
+        interface = getattr(parent, "interface_preferences", None)
+        self.tr: Callable[[str], str] = interface.tr if interface is not None else (lambda text: text)
         self.window = tk.Toplevel(parent)
         self.window.title("Select the initial sync point")
         make_maximizable(self.window)
@@ -75,7 +77,7 @@ class CuePairDialog:
             scrollbar = ttk.Scrollbar(frame, command=tree.yview)
             scrollbar.grid(row=1, column=1, sticky="ns")
             tree.configure(yscrollcommand=scrollbar.set)
-            preview = tk.StringVar(value="Select a cue. Search above by text or cue number.")
+            preview = tk.StringVar(value=self.tr("Select a cue. Search above by text or cue number."))
             auto_wrap(ttk.Label(frame, textvariable=preview, wraplength=470)).grid(
                 row=2, column=0, columnspan=2, sticky="ew", pady=(8, 0)
             )
@@ -84,7 +86,7 @@ class CuePairDialog:
             search.trace_add("write", lambda *_args, side=column: self._populate(side))
             tree.bind("<<TreeviewSelect>>", lambda _event, side=column: self._select(side))
             self._populate(column)
-        self.summary = tk.StringVar(value="Choose one cue on each side.")
+        self.summary = tk.StringVar(value=self.tr("Choose one cue on each side."))
         ttk.Label(self.window, textvariable=self.summary).grid(
             row=2, column=0, columnspan=2, sticky="w", padx=12, pady=10
         )
@@ -106,7 +108,7 @@ class CuePairDialog:
             if not query or query in cue.text.casefold() or query == str(number):
                 tree.insert("", "end", iid=str(number), values=(number, ms_to_timestamp(cue.start_ms), cue.text))
         self.selected[side] = None
-        self.previews[side].set("Select a cue. Search above by text or cue number.")
+        self.previews[side].set(self.tr("Select a cue. Search above by text or cue number."))
         if hasattr(self, "confirm"):
             self._update_summary()
 
@@ -123,11 +125,13 @@ class CuePairDialog:
     def _update_summary(self) -> None:
         if None in self.selected:
             self.confirm.configure(state="disabled")
-            self.summary.set("Choose one cue on each side.")
+            self.summary.set(self.tr("Choose one cue on each side."))
             return
         left, right = self.selected
         offset = self.cues[1][right - 1].start_ms - self.cues[0][left - 1].start_ms
-        self.summary.set(f"Source cue {left} = reference cue {right}; initial offset: {offset / 1000:+.3f} s")
+        self.summary.set(self.tr("Source cue {source} = reference cue {reference}; initial offset: {offset} s").format(
+            source=left, reference=right, offset=f"{offset / 1000:+.3f}",
+        ))
         self.confirm.configure(state="normal")
 
     def _confirm(self) -> None:
