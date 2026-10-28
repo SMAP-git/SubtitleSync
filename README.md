@@ -5,7 +5,7 @@ reference SRT, in the same or a different language, or an embedded SubRip track.
 Processing is local; the first analysis downloads the multilingual model.
 Original source and reference subtitles are kept unchanged.
 
-![SubSync v1.1.0 application window](docs/images/subsync-v1.1.0.png)
+![SubSync v1.1.1 application window](docs/images/subsync-v1.1.1.png)
 
 ## Published downloads (v1.1.1)
 
@@ -728,6 +728,15 @@ is not published by the supplied Compose configuration/template.
    then click **Use selected pair**. The source cue can be anywhere in the file.
    Its target start time comes directly from the reference cue; the app never
    replaces your choice with an automatic first-cue guess.
+
+   The initial sync point does **not** need to be at the beginning of the files.
+   Choose any dialogue that you can clearly identify in both subtitles. A good
+   choice is the place where automatic synchronization drifted or failed. In the
+   example below, an automatic run was aligned everywhere except around minute 37.
+   Source cue 585 (00:37:02,930) was paired with reference cue 945 (00:37:10,329),
+   giving an initial offset of +7.399 s. Because the app still checks many other
+   matching cues before and after that anchor, the resulting synchronized
+   subtitle was aligned throughout the whole file.
 
    ![Selecting the initial sync point: source cue 585 matched to reference cue 945](docs/images/initial-sync-point.png)
 
