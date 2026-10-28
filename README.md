@@ -228,6 +228,9 @@ pairs and uncertain initial matches are recorded as failures, and processing
 continues with the next file. Cancel stops further processing and retains outputs
 already completed. The final scrollable report has one row per source file,
 including success, failure, skipped/cancelled status, output path and details.
+
+![Folder synchronization report with per-file status and match details](docs/images/folder-sync-report.png)
+
 Optional per-file text reports follow the **Generate sync report** setting.
 If **Sync to audio after analysis** is enabled, each pair must have exactly one
 video with the same title in that folder; the first audio track is used.
@@ -725,6 +728,9 @@ is not published by the supplied Compose configuration/template.
    then click **Use selected pair**. The source cue can be anywhere in the file.
    Its target start time comes directly from the reference cue; the app never
    replaces your choice with an automatic first-cue guess.
+
+   ![Selecting the initial sync point: source cue 585 matched to reference cue 945](docs/images/initial-sync-point.png)
+
 5. Choose an output file and click **Analyze and synchronize**.
 
 The selected source cue is a fixed anchor. Other reliable matches are found both
