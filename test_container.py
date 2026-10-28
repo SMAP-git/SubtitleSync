@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parent
 class ContainerPackagingTests(unittest.TestCase):
     def test_cpu_variant_has_no_gpu_configuration(self):
         root = ET.parse(ROOT / "unraid/subtitle-sync-cpu.xml").getroot()
-        self.assertEqual(root.findtext("Repository"), "subtitle-sync:1.1.0-cpu")
+        self.assertEqual(root.findtext("Repository"), "subtitle-sync:1.1.1-cpu")
         self.assertNotIn("--gpus", root.findtext("ExtraParams"))
         self.assertNotIn("--device", root.findtext("ExtraParams"))
         self.assertFalse(any(n.attrib["Type"] == "Device" for n in root.findall("Config")))
@@ -91,7 +91,7 @@ for action in (lambda: g.runtime_directory('NVIDIA'), lambda: s.package('CUDA'),
 
     def test_unraid_defaults_work_without_gpu(self):
         root = ET.parse(ROOT / "unraid/subtitle-sync.xml").getroot()
-        self.assertEqual(root.findtext("Repository"), "subtitle-sync:1.1.0")
+        self.assertEqual(root.findtext("Repository"), "subtitle-sync:1.1.1")
         self.assertEqual(root.findtext("Privileged"), "false")
         self.assertNotIn("--gpus", root.findtext("ExtraParams"))
         configs = {node.attrib["Target"]: node for node in root.findall("Config")}

@@ -134,6 +134,213 @@ class SyncOutputTests(unittest.TestCase):
         self.assertEqual(self.output.read_bytes(), b"original")
 
 
+class TimingScaleTests(unittest.TestCase):
+    def test_real_episode_timing_noise_does_not_masquerade_as_a_section_cut(self):
+        # Timing-only samples from the reported 25-FPS failure; no dialogue/model dependency.
+        pairs = [
+            (19841, 20588), (65320, 67901), (162360, 169603), (210921, 221922),
+            (285801, 298532), (376480, 393594), (424560, 442743), (452921, 472673),
+            (503721, 526059), (613201, 640107), (651361, 681414), (699080, 730063),
+            (767881, 802169), (819080, 856523), (859600, 898365), (898201, 939006),
+            (940240, 985085), (960000, 1006073), (1016880, 1064331), (1053400, 1101301),
+            (1076560, 1125292), (1106681, 1156456), (1127001, 1178378), (1154920, 1206973),
+            (1188041, 1241741), (1237201, 1292892), (1385360, 1450683), (1415440, 1480212),
+            (1439921, 1508207), (1480241, 1548347), (1564960, 1636969), (1614960, 1689355),
+            (1669321, 1745878), (1704641, 1783950), (1802441, 1886118), (1831000, 1915982),
+            (1961241, 2050816), (2002040, 2093692), (2042040, 2136602), (2154320, 2255487),
+            (2182001, 2284350), (2211761, 2315781), (2257481, 2363161), (2344201, 2453652),
+            (2406720, 2519184),
+        ]
+        source = [alignment.Cue(start, start + 2000, "Distinct dialogue") for start, _ in pairs]
+        matches = [(i + 1, i + 1, end - start, 0.9) for i, (start, end) in enumerate(pairs)]
+        estimate = alignment._estimate_timing_scale(source, matches)
+        self.assertIsNotNone(estimate)
+        self.assertAlmostEqual(estimate.scale, 1.046917, places=5)
+        self.assertLess(estimate.validation_error_ms, 1500)
+        residuals = [
+            target - (estimate.scale * start + estimate.offset_ms) for start, target in pairs
+        ]
+        self.assertTrue(any(
+            1500 < abs(left) < 4500 and 1500 < abs(right) < 4500 and left * right > 0
+            for left, right in zip(residuals, residuals[1:])
+        ))
+        for factor in (0.5, 1.0, 2.0):
+            with self.subTest(direction=factor):
+                changed = [replace(
+                    cue, start_ms=round(cue.start_ms * factor), end_ms=round(cue.end_ms * factor),
+                ) for cue in source]
+                changed_matches = [
+                    (i + 1, i + 1, target - changed[i].start_ms, 0.9)
+                    for i, (_, target) in enumerate(pairs)
+                ]
+                adjusted = alignment._estimate_timing_scale(changed, changed_matches)
+                self.assertIsNotNone(adjusted)
+                self.assertAlmostEqual(adjusted.scale * factor, estimate.scale, places=5)
+
+    def source_cues(self, count=24):
+        return [
+            alignment.Cue(120000 + i * 300000, 122000 + i * 300000, f"Distinct timing dialogue {i}")
+            for i in range(count)
+        ]
+
+    def matches(self, source, scale, offset=15000):
+        return [
+            (i + 1, i + 1, round(cue.start_ms * scale + offset) - cue.start_ms, 1.0)
+            for i, cue in enumerate(source)
+        ]
+
+    def test_estimator_supports_common_rates_in_every_direction(self):
+        source = self.source_cues()
+        rates = (24000 / 1001, 24, 25, 30000 / 1001, 30, 50, 60000 / 1001, 60)
+        for before in rates:
+            for after in rates:
+                with self.subTest(before=before, after=after):
+                    scale = before / after
+                    matches = self.matches(source, scale)
+                    estimate = alignment._estimate_timing_scale(source, matches)
+                    if before == after:
+                        self.assertIsNone(estimate)
+                    else:
+                        self.assertIsNotNone(estimate)
+                        self.assertAlmostEqual(estimate.scale, scale, places=6)
+                        self.assertLess(estimate.validation_error_ms, 2)
+
+    def test_estimator_ignores_sparse_outliers_but_preserves_manual_anchor(self):
+        source = self.source_cues()
+        scale = 25 / (24000 / 1001)
+        matches = self.matches(source, scale)
+        for index in (4, 17):
+            number, ref, shift, score = matches[index]
+            matches[index] = number, ref, shift + 40000, score
+        manual = source[12].start_ms, round(source[12].start_ms * scale + 15000)
+        estimate = alignment._estimate_timing_scale(source, matches, manual)
+        self.assertIsNotNone(estimate)
+        self.assertEqual(len(estimate.matches), 22)
+        self.assertAlmostEqual(manual[0] * estimate.scale + estimate.offset_ms, manual[1])
+        self.assertLess(estimate.validation_error_ms, 2)
+        self.assertIsNone(alignment._estimate_timing_scale(
+            source, matches, (manual[0], manual[1] + 20000),
+        ))
+
+    def test_estimator_rejects_cuts_nonlinear_drift_and_failed_held_out_predictions(self):
+        source = self.source_cues()
+        for shifts in (
+            [0 if i < 12 else 30000 for i in range(24)],
+            [round(cue.start_ms * 0.04) + (0 if i < 22 else 30000)
+             for i, cue in enumerate(source)],
+            [i * i * 250 for i in range(24)],
+            [round(cue.start_ms * 0.04) + (0 if i % 2 == 0 else 8000)
+             for i, cue in enumerate(source)],
+        ):
+            with self.subTest(shifts=shifts):
+                matches = [(i + 1, i + 1, shift, 1.) for i, shift in enumerate(shifts)]
+                self.assertIsNone(alignment._estimate_timing_scale(source, matches))
+
+    def test_estimator_rejects_insufficient_or_concentrated_evidence(self):
+        source = self.source_cues()
+        matches = self.matches(source, 1.04)
+        self.assertIsNone(alignment._estimate_timing_scale(source, matches[:8]))
+        self.assertIsNone(alignment._estimate_timing_scale(source, matches[:10]))
+
+    def test_analysis_recovers_long_drift_in_both_directions_and_keeps_manual_pair_exact(self):
+        source = self.source_cues()
+        for scale in (25 / (24000 / 1001), (24000 / 1001) / 25, 2.5, 0.4):
+            for automatic in (False, True):
+                with self.subTest(scale=scale, automatic=automatic):
+                    reference = [
+                        replace(cue, start_ms=round(cue.start_ms * scale + 15000),
+                                end_ms=round(cue.end_ms * scale + 15000),
+                                text=f"Reference translation sentence {i}")
+                        for i, cue in enumerate(source)
+                    ]
+                    model = Mock()
+                    model.embed.side_effect = lambda texts, **_: [
+                        np.eye(len(source))[int(text.rsplit(" ", 1)[-1])] for text in texts
+                    ]
+                    messages = []
+                    with patch.object(alignment, "_load_embedding_model", return_value=model):
+                        anchors, diagnostics = alignment.analyze_subtitles(
+                            source, reference, 0, source_anchor=12, reference_anchor=12,
+                            automatic_initial=automatic, progress=messages.append,
+                        )
+                    self.assertEqual(diagnostics["timing_scale_applied"], 1)
+                    self.assertAlmostEqual(diagnostics["timing_scale"], scale, places=6)
+                    self.assertEqual(diagnostics["matched_cues"], len(source) - 1)
+                    if not automatic:
+                        self.assertIn((12, (reference[11].start_ms - source[11].start_ms) / 1000), anchors)
+                    synced, count = sync_subtitles.sync_srt(
+                        fixture(source), anchors, timing_scale=diagnostics["timing_scale"],
+                    )
+                    self.assertEqual(count, len(source))
+                    for actual, expected, original in zip(alignment.parse_srt(synced), reference, source):
+                        self.assertLessEqual(abs(actual.start_ms - expected.start_ms), 1)
+                        self.assertLessEqual(abs(actual.end_ms - expected.end_ms), 2)
+                        self.assertEqual(actual.text, original.text)
+                    model.embed.assert_called_once()
+                    self.assertTrue(any("Timing scale accepted" in message for message in messages))
+
+    def test_scale_retimes_both_boundaries_and_extrapolates_outside_anchors(self):
+        source = self.source_cues(5)
+        scale = 1.25
+        anchors = [(3, (source[2].start_ms * (scale - 1) + 5000) / 1000)]
+        synced, _ = sync_subtitles.sync_srt(fixture(source), anchors, timing_scale=scale)
+        for cue, original in zip(alignment.parse_srt(synced), source):
+            self.assertEqual(cue.start_ms, round(original.start_ms * scale + 5000))
+            self.assertEqual(cue.end_ms, round(original.end_ms * scale + 5000))
+        for invalid in (0, -1, float("nan"), float("inf")):
+            with self.assertRaisesRegex(ValueError, "finite and positive"):
+                sync_subtitles.sync_srt(fixture(source), anchors, timing_scale=invalid)
+        with self.assertRaisesRegex(ValueError, "negative timestamps"):
+            sync_subtitles.sync_srt(fixture(source), [(3, -1000.)], timing_scale=scale)
+
+    def test_vulkan_analysis_uses_the_same_scale_detection_and_serializable_diagnostics(self):
+        source = self.source_cues(12)
+        reference = [replace(
+            cue, start_ms=round(cue.start_ms * 1.04), end_ms=round(cue.end_ms * 1.04),
+        ) for cue in source]
+        model = Mock()
+        model.embed.side_effect = lambda texts, **_: [
+            np.eye(len(source))[int(text.rsplit(" ", 1)[-1])] for text in texts
+        ]
+        with patch.object(alignment.vulkan_embeddings, "VulkanEmbedding", return_value=model):
+            anchors, diagnostics = alignment.analyze_subtitles(
+                source, reference, 0, backend="Vulkan", automatic_initial=True,
+            )
+        self.assertEqual(diagnostics["timing_scale_applied"], 1)
+        self.assertAlmostEqual(diagnostics["timing_scale"], 1.04, places=6)
+        self.assertEqual(len(anchors), len(source))
+        self.assertEqual(json.loads(json.dumps(diagnostics)), diagnostics)
+        model.close.assert_called_once()
+
+    def test_estimator_accepts_small_boundary_jitter_without_snapping_to_an_fps_ratio(self):
+        source = self.source_cues()
+        scale = 1.037123
+        matches = self.matches(source, scale)
+        matches = [
+            (number, ref, shift + ((index % 3) - 1) * 300, score)
+            for index, (number, ref, shift, score) in enumerate(matches)
+        ]
+        estimate = alignment._estimate_timing_scale(source, matches)
+        self.assertIsNotNone(estimate)
+        self.assertAlmostEqual(estimate.scale, scale, delta=0.0001)
+        self.assertLess(estimate.validation_error_ms, 500)
+
+    def test_repeated_dialogue_is_not_global_scale_evidence(self):
+        source = self.source_cues()
+        vectors = {cue.text: np.array([1., 0.]) for cue in source}
+        self.assertEqual(alignment._global_dialogue_matches(
+            source, source, vectors, 70, lambda _: None,
+        ), [])
+
+    def test_timing_estimation_checks_cancellation_between_hypothesis_groups(self):
+        source = self.source_cues()
+        with self.assertRaisesRegex(RuntimeError, "cancelled"):
+            alignment._estimate_timing_scale(
+                source, self.matches(source, 1.04),
+                progress=Mock(side_effect=RuntimeError("cancelled")),
+            )
+
+
 class ContextMatchingTests(unittest.TestCase):
     def test_automatic_initial_pair_ignores_credits_and_finds_consistent_nonfirst_dialogue(self):
         source = [

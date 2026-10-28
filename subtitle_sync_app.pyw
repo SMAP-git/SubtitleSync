@@ -167,7 +167,9 @@ class SubtitleSyncApp:
         self.device_help = tk.StringVar()
         self.report_enabled = tk.StringVar(value="0")
         self.audio_after_sync = tk.StringVar(value="0")
+        self.final_offset_ms = tk.StringVar(value="0")
         self.automatic_initial = tk.StringVar(value="0")
+        self.batch_automatic_initial = False
         self.folder_path = tk.StringVar()
         self.folder_language_text = tk.StringVar()
         self.folder_source = ""
@@ -180,6 +182,7 @@ class SubtitleSyncApp:
         self.first_cue_text = tk.StringVar(value="Select matching dialogue cues in the two subtitles.")
         self.status = tk.StringVar(value="Choose source and reference subtitles in any supported languages.")
         self.sync_selection: SyncSelection | None = None
+        self.folder_pair_dialog: CuePairDialog | None = None
         self.embedded_track: tuple[tuple[tuple[str, int, int], ...], int] | None = None
         self.messages: queue.Queue[tuple[str, object]] = queue.Queue()
         self.busy = False
@@ -298,29 +301,34 @@ class SubtitleSyncApp:
         processing_options.columnconfigure(0, weight=1)
         processing = ttk.LabelFrame(processing_options, text="Processing device", padding=9)
         processing.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
-        self.report_group = ttk.LabelFrame(processing_options, text="Report", padding=9)
+        self.report_group = ttk.LabelFrame(processing_options, text="Report and extra", padding=9)
         self.report_group.grid(row=0, column=1, sticky="nsew")
         self.report_checkbox = ttk.Checkbutton(
             self.report_group, text="Generate sync report", variable=self.report_enabled,
             onvalue="1", offvalue="0",
         )
-        self.report_checkbox.pack(anchor="w")
+        self.report_checkbox.grid(row=0, column=0, sticky="w")
         self.audio_after_checkbox = ttk.Checkbutton(
             self.report_group, text="Sync to audio after analysis", variable=self.audio_after_sync,
             onvalue="1", offvalue="0",
         )
-        self.audio_after_checkbox.pack(anchor="w", pady=(8, 0))
+        self.audio_after_checkbox.grid(row=1, column=0, sticky="w", pady=(8, 0))
         auto_wrap(ttk.Label(
             self.report_group, text="Video required; uses the first audio track.", wraplength=240,
-        )).pack(fill="x", pady=(4, 0))
+        )).grid(row=2, column=0, sticky="ew", pady=(4, 0))
+        offset_box = ttk.LabelFrame(self.report_group, text="Final offset (ms)", padding=6)
+        offset_box.grid(row=0, column=1, rowspan=3, sticky="ns", padx=(10, 0))
+        self.final_offset_entry = ttk.Entry(offset_box, textvariable=self.final_offset_ms, width=9)
+        self.final_offset_entry.pack(anchor="w")
+        ttk.Label(offset_box, text="+ delay / - advance").pack(anchor="w", pady=(4, 0))
         processing.columnconfigure(3, weight=1)
         self.device_selector = ttk.Combobox(
             processing, textvariable=self.processing_device,
-            values=subtitle_alignment.PROCESSING_DEVICES, state="readonly", width=22,
+            values=subtitle_alignment.PROCESSING_DEVICES, state="readonly", width=16,
         )
         self.device_selector.grid(row=0, column=0, sticky="w")
         self.device_selector.bind("<<ComboboxSelected>>", self._update_device_display)
-        ttk.Label(processing, text="GPU adapter ID").grid(row=0, column=1, padx=(16, 8))
+        ttk.Label(processing, text="GPU adapter ID").grid(row=0, column=1, padx=(8, 4))
         self.device_id_entry = ttk.Entry(processing, textvariable=self.device_id, width=6)
         self.device_id_entry.grid(row=0, column=2, sticky="w")
         self.setup_button = ttk.Button(
@@ -332,11 +340,11 @@ class SubtitleSyncApp:
         ttk.Label(backend_row, text="Inference backend").pack(side="left", padx=(0, 8))
         self.backend_selector = ttk.Combobox(
             backend_row, textvariable=self.processing_backend,
-            values=self.processing_choices["backend"], state="readonly", width=22,
+            values=self.processing_choices["backend"], state="readonly", width=16,
         )
         self.backend_selector.pack(side="left")
         self.backend_selector.bind("<<ComboboxSelected>>", self._update_device_display)
-        auto_wrap(ttk.Label(processing, textvariable=self.device_help, wraplength=680)).grid(
+        auto_wrap(ttk.Label(processing, textvariable=self.device_help, wraplength=480)).grid(
             row=2, column=0, columnspan=4, sticky="ew", pady=(6, 0)
         )
         self._update_device_display()
@@ -1443,7 +1451,6 @@ class SubtitleSyncApp:
             self.folder_path.set(selected)
             self._refresh_folder()
             self._update_folder_languages()
-            self.automatic_initial.set("1")
             self._update_initial_mode()
             window.destroy()
 
@@ -1455,6 +1462,7 @@ class SubtitleSyncApp:
         if self.busy or self.setup_busy:
             return
         try:
+            final_offset_ms = 0 if audio_only else self._read_final_offset()
             folder_value = self.audio_folder_path.get() if audio_only else self.folder_path.get()
             if not folder_value.strip():
                 raise ValueError("Choose a folder first.")
@@ -1515,15 +1523,13 @@ class SubtitleSyncApp:
                 self.interface.tr(str(error)), parent=self.root,
             )
             return
-        if not audio_only:
-            self.automatic_initial.set("1")
         strictness = int(self.hearing_impaired_strictness.get())
         generate_report = self.report_enabled.get() == "1"
         audio_pass = self.audio_after_sync.get() == "1"
         self.busy = self.batch_running = True
         self.sync_cancel.clear()
         self.sync_committed = False
-        for control in (self.sync_button, self.pair_button, self.automatic_initial_checkbox,
+        for control in (self.sync_button, self.pair_button, self.final_offset_entry,
                         self.device_selector, self.backend_selector, self.setup_button, self.folder_browse,
                         self.folder_entry, self.folder_source_combo, self.folder_reference_combo,
                         self.audio_folder_entry, self.audio_folder_browse, self.audio_folder_sync):
@@ -1550,10 +1556,23 @@ class SubtitleSyncApp:
                     if audio_only:
                         self._audio_folder_worker(video, source, output, generate_report, events)
                     else:
+                        automatic_initial = self.batch_automatic_initial
+                        selection = None
+                        if not automatic_initial:
+                            try:
+                                selection = self._request_folder_selection(source, reference)
+                            except (OSError, ValueError) as error:
+                                rows.append((str(source), "Failed", str(output), str(error)))
+                                continue
+                            if selection is None:
+                                self.sync_cancel.set()
+                                rows.append((str(source), "Cancelled", str(output), "Cue selection cancelled."))
+                                continue
                         self._sync_worker(
                             video, source, reference, output, 0, strictness, device, adapter, backend,
                             generate_report=generate_report, sync_to_audio=audio_pass,
-                            automatic_initial=True, events=events,
+                            selection=selection, automatic_initial=automatic_initial, events=events,
+                            final_offset_ms=final_offset_ms,
                         )
                     terminal = None
                     while not events.empty():
@@ -1584,6 +1603,52 @@ class SubtitleSyncApp:
 
         threading.Thread(target=run, daemon=True).start()
         self.root.after(150, self._poll_worker)
+
+    def _request_folder_selection(self, source: Path, reference: Path) -> SyncSelection | None:
+        paths = (str(source), str(reference))
+        signatures = input_signatures(paths)
+        left = tuple(subtitle_alignment.read_srt(source))
+        right = tuple(subtitle_alignment.read_srt(reference))
+        if input_signatures(paths) != signatures:
+            raise ValueError("An input changed while loading. Select the cues again.")
+        response: queue.Queue[SyncSelection | None] = queue.Queue()
+        self.messages.put(("folder_select_pair", (source, reference, left, right, signatures, response)))
+        while not self.sync_cancel.is_set():
+            try:
+                return response.get(timeout=0.1)
+            except queue.Empty:
+                continue
+        return None
+
+    def _show_folder_pair_picker(
+        self, source_path: Path, reference_path: Path,
+        source: tuple[subtitle_alignment.Cue, ...],
+        reference: tuple[subtitle_alignment.Cue, ...],
+        signatures: tuple[tuple[str, int, int], ...],
+        response: queue.Queue[SyncSelection | None],
+    ) -> None:
+        if self.sync_cancel.is_set():
+            response.put(None)
+            return
+        accepted = False
+
+        def accept(left: int, right: int) -> None:
+            nonlocal accepted
+            accepted = True
+            response.put(SyncSelection(source, reference, left, right, signatures))
+
+        dialog = CuePairDialog(self.root, source, reference, accept)
+        self.folder_pair_dialog = dialog
+        dialog.window.title(f"{source_path.name} -> {reference_path.name}")
+
+        def closed(event: tk.Event) -> None:
+            if event.widget is dialog.window:
+                self.folder_pair_dialog = None
+                if not accepted:
+                    self.sync_cancel.set()
+                    response.put(None)
+
+        dialog.window.bind("<Destroy>", closed, add="+")
 
     def _audio_folder_worker(
         self, video: Path | None, source: Path, output: Path,
@@ -1664,8 +1729,7 @@ class SubtitleSyncApp:
         self.first_cue_text.set(self.interface.tr("Select matching dialogue cues in the two subtitles."))
 
     def _update_initial_mode(self, *_args: object) -> None:
-        if self.folder_path.get() and self.automatic_initial.get() != "1":
-            self.automatic_initial.set("1")
+        self.batch_automatic_initial = self.automatic_initial.get() == "1"
         self.pair_button.configure(
             state="disabled" if self.busy or self.automatic_initial.get() == "1" else "normal",
         )
@@ -1813,6 +1877,11 @@ class SubtitleSyncApp:
         if self.folder_path.get():
             self._start_folder_sync()
             return
+        try:
+            final_offset_ms = self._read_final_offset()
+        except ValueError as error:
+            messagebox.showerror(self.interface.tr("Report and extra"), str(error), parent=self.root)
+            return
         video_value = self.video_path.get().strip()
         video = Path(video_value).expanduser() if video_value else None
         if self.audio_after_sync.get() == "1" and (video is None or not video.is_file()):
@@ -1912,6 +1981,7 @@ class SubtitleSyncApp:
         self.busy = True
         self.sync_button.configure(state="disabled")
         self.automatic_initial_checkbox.configure(state="disabled")
+        self.final_offset_entry.configure(state="disabled")
         self.device_selector.configure(state="disabled")
         self.device_id_entry.configure(state="disabled")
         self.setup_button.configure(state="disabled")
@@ -1939,11 +2009,18 @@ class SubtitleSyncApp:
                 "generate_report": self.report_enabled.get() == "1",
                 "sync_to_audio": self.audio_after_sync.get() == "1",
                 "automatic_initial": automatic_initial,
+                "final_offset_ms": final_offset_ms,
             },
             daemon=True,
         )
         worker.start()
         self.root.after(150, self._poll_worker)
+
+    def _read_final_offset(self) -> int:
+        value = self.final_offset_ms.get().strip()
+        if not re.fullmatch(r"[+-]?[0-9]+", value):
+            raise ValueError("Final offset must be a whole number of milliseconds (positive or negative).")
+        return int(value)
 
     def _cancel_sync(self) -> None:
         with self.sync_commit_lock:
@@ -1969,6 +2046,7 @@ class SubtitleSyncApp:
         sync_to_audio: bool = False,
         automatic_initial: bool = False,
         events: queue.Queue | None = None,
+        final_offset_ms: int = 0,
     ) -> None:
         messages = self.messages if events is None else events
         try:
@@ -2052,7 +2130,9 @@ class SubtitleSyncApp:
                 raise ValueError("An input changed during analysis. No output was written.")
             if reference_path is not None and output.resolve() == reference_path.resolve():
                 raise ValueError("Output must not overwrite the reference subtitle.")
-            synced_text, cue_count = sync_subtitles.sync_srt(source_text, anchors)
+            synced_text, cue_count = sync_subtitles.sync_srt(
+                source_text, anchors, timing_scale=diagnostics.get("timing_scale", 1.0),
+            )
             encoded = synced_text.encode(encoding)
             if had_bom:
                 encoded = b"\xef\xbb\xbf" + encoded
@@ -2084,6 +2164,13 @@ class SubtitleSyncApp:
                         raise ValueError("An input changed during synchronization. No output was saved.")
                     synced_text, _, _ = sync_subtitles.decode_srt(audio_result.read_bytes())
                     audio_result.replace(staged_path)
+                if final_offset_ms:
+                    progress(f"Applying final subtitle offset: {final_offset_ms:+d} ms.")
+                    synced_text = sync_subtitles.shift_srt(synced_text, final_offset_ms)
+                    encoded = synced_text.encode(encoding)
+                    if had_bom:
+                        encoded = b"\xef\xbb\xbf" + encoded
+                    staged_path.write_bytes(encoded)
                 with self.sync_commit_lock:
                     if self.sync_cancel.is_set():
                         raise gpu_runtime.CancelledError("Synchronization cancelled. No output was written.")
@@ -2115,6 +2202,7 @@ class SubtitleSyncApp:
                             "Initial source cue": diagnostics.get("source_anchor"),
                             "Initial reference cue": diagnostics.get("reference_anchor"),
                             "Automatic initial sync point": automatic_initial,
+                            "Final offset (ms)": final_offset_ms,
                             "Automatic audio synchronization": sync_to_audio,
                             "Audio track": audio_track.label if sync_to_audio else None,
                         },
@@ -2133,6 +2221,8 @@ class SubtitleSyncApp:
                 messages.put(("error", str(error)))
 
     def _poll_worker(self) -> None:
+        if self.folder_pair_dialog is not None and self.sync_cancel.is_set():
+            self.folder_pair_dialog.window.destroy()
         try:
             while True:
                 kind, payload = self.messages.get_nowait()
@@ -2168,6 +2258,8 @@ class SubtitleSyncApp:
                         return
                     else:
                         self._show_pair_picker(*payload)
+                elif kind == "folder_select_pair":
+                    self._show_folder_pair_picker(*payload)
                 elif kind == "automatic_initial":
                     source, reference, left, right, signatures = payload
                     self.sync_selection = SyncSelection(tuple(source), tuple(reference), left, right, signatures)
@@ -2213,6 +2305,7 @@ class SubtitleSyncApp:
     def _finish(self) -> None:
         self.busy = False
         self.automatic_initial_checkbox.configure(state="normal")
+        self.final_offset_entry.configure(state="normal")
         self.sync_cancel.clear()
         self.cancel_sync_button.configure(state="disabled")
         self.progress.stop()

@@ -210,7 +210,9 @@ def runtime_package(device: str) -> str:
     device = device_vendor(device)
     runtime_directory(device)
     if device == "NVIDIA":
-        return "onnxruntime-gpu[cuda,cudnn]==1.23.2"
+        # 1.26.0 is the newest CUDA 12 build; it requires Python 3.11+.
+        version = "1.26.0" if sys.version_info >= (3, 11) else "1.23.2"
+        return f"onnxruntime-gpu[cuda,cudnn]=={version}"
     if sys.platform == "win32":
         return "onnxruntime-directml"
     if device == "INTEL":

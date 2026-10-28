@@ -50,14 +50,14 @@ RUN python -m pip install --no-cache-dir -r /opt/subtitle-sync/requirements.txt 
     && test "$CPU_ONLY:$WITH_CUDA" != "1:1" \
     && case "$WITH_CUDA" in \
         1) python -m pip uninstall -y onnxruntime \
-           && python -m pip install --no-cache-dir 'onnxruntime-gpu[cuda,cudnn]==1.23.2' ;; \
+           && python -m pip install --no-cache-dir 'onnxruntime-gpu[cuda,cudnn]==1.26.0' ;; \
         0) ;; \
         *) echo 'WITH_CUDA must be 0 or 1' >&2; exit 1 ;; \
        esac \
     && python -c 'import tkinter, fastembed, imageio_ffmpeg, onnxruntime, os; assert ("CUDAExecutionProvider" in onnxruntime.get_available_providers()) == (os.environ["SUBTITLE_SYNC_BUNDLED_CUDA"] == "1")'
 
 ENV APP_NAME="SubSync" \
-    APP_VERSION=1.1.0
+    APP_VERSION=1.1.1
 WORKDIR /opt/subtitle-sync
 COPY subtitle_sync_app.pyw subtitle_alignment.py sync_subtitles.py \
     gpu_runtime.py vulkan_embeddings.py manual_sync.py speech_to_text.py \

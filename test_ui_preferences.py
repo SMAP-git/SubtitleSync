@@ -284,7 +284,7 @@ class InterfaceTests(unittest.TestCase):
         self.assertEqual(set(files["other"]), {"pt-pt", "pt-br", "en"})
         self.assertEqual(len(files), 2)
 
-    def test_folder_popup_displays_selected_source_reference_and_requires_automatic_mode(self):
+    def test_folder_popup_displays_selected_source_reference_and_allows_manual_mode(self):
         folder = Path(self.temporary.name)
         (folder / "Episode.Portuguese.srt").touch()
         (folder / "Episode.en.srt").touch()
@@ -302,9 +302,9 @@ class InterfaceTests(unittest.TestCase):
         self.assertEqual(self.app.folder_language_text.get(), "Source: pt\nReference: en")
         self.change("pt", "dark")
         self.assertEqual(self.app.folder_language_text.get(), "Origem: pt\nReferência: en")
-        self.assertEqual(self.app.automatic_initial.get(), "1")
+        self.app.automatic_initial.set("1")
         self.app.automatic_initial.set("0")
-        self.assertEqual(self.app.automatic_initial.get(), "1")
+        self.assertEqual(self.app.automatic_initial.get(), "0")
         self.assertEqual(self.app.folder_group["text"], "Modo de pasta SRT")
         self.assertEqual(self.app.folder_browse.grid_info()["row"], self.app.folder_entry.grid_info()["row"])
         self.assertEqual(str(self.app.folder_entry["state"]), "normal")
@@ -329,7 +329,7 @@ class InterfaceTests(unittest.TestCase):
         self.app._refresh_folder()
         self.assertEqual(set(self.app.folder_source_combo["values"]), {"en", "pt-br"})
         self.assertEqual(set(self.app.folder_reference_combo["values"]), {"en", "pt-br"})
-        self.assertEqual(self.app.automatic_initial.get(), "1")
+        self.assertEqual(self.app.automatic_initial.get(), "0")
 
     def test_folder_browse_buttons_are_right_of_editable_paths_and_audio_sync_is_below(self):
         self.root.deiconify()
@@ -474,6 +474,7 @@ class InterfaceTests(unittest.TestCase):
         (folder / "C.pt.synced.srt").write_text("existing result")
         self.app.folder_path.set(str(folder))
         self.app.folder_source, self.app.folder_reference = "pt", "en"
+        self.app.automatic_initial.set("1")
         calls = []
 
         def analyze(source, reference, initial, **kwargs):
@@ -510,12 +511,231 @@ class InterfaceTests(unittest.TestCase):
         self.assertEqual(len(table.get_children()), 4)
         popup.destroy()
 
+    def test_folder_manual_mode_prompts_for_each_eligible_pair_and_passes_selected_anchors(self):
+        folder = Path(self.temporary.name)
+        content = (
+            "1\n00:00:01,000 --> 00:00:02,000\nFirst dialogue\n\n"
+            "2\n00:00:04,000 --> 00:00:05,000\nSecond dialogue\n"
+        )
+        for stem in ("A", "B", "C"):
+            for language in ("pt", "en"):
+                (folder / f"{stem}.{language}.srt").write_text(content)
+        (folder / "C.pt.synced.srt").write_text("existing")
+        self.app.folder_path.set(str(folder))
+        self.app.folder_source, self.app.folder_reference = "pt", "en"
+        self.app.automatic_initial.set("0")
+        prompted = []
+        put = self.app.messages.put
+
+        def message(item):
+            if item[0] != "folder_select_pair":
+                put(item)
+                return
+            self.app._show_folder_pair_picker(*item[1])
+            dialog = self.app.folder_pair_dialog
+            prompted.append(dialog.window.title())
+            self.assertTrue(self.app.busy)
+            dialog.selected = [2, 1]
+            dialog._confirm()
+
+        def analyze(source, reference, initial, **kwargs):
+            self.assertNotIn("automatic_initial", kwargs)
+            self.assertEqual((kwargs["source_anchor"], kwargs["reference_anchor"]), (2, 1))
+            return [(2, -3.)], {"matched_cues": 1, "match_percent": 100}
+
+        with (
+            patch.object(self.gui.threading, "Thread", side_effect=lambda **kwargs: Mock(start=kwargs["target"])),
+            patch.object(self.root, "after"),
+            patch.object(self.gui.subtitle_alignment, "validate_processing_device"),
+            patch.object(self.app.messages, "put", side_effect=message),
+            patch.object(self.gui.subtitle_alignment, "analyze_subtitles", side_effect=analyze) as analyze_mock,
+        ):
+            self.app._start_sync()
+        self.assertEqual(analyze_mock.call_count, 2)
+        self.assertEqual(prompted, [
+            "A.pt.srt -> A.en.srt", "B.pt.srt -> B.en.srt",
+        ])
+        rows = list(self.app.messages.queue)[-1][1]
+        self.assertEqual([row[1] for row in rows], ["Success", "Success", "Skipped"])
+        self.assertEqual(self.app.automatic_initial.get(), "0")
+        self.assertIsNone(self.app.folder_pair_dialog)
+        self.app.batch_running = False
+        self.app._finish()
+
+    def test_folder_live_automatic_toggle_applies_to_next_file_in_both_directions(self):
+        folder = Path(self.temporary.name)
+        for stem in ("A", "B", "C"):
+            for language in ("pt", "en"):
+                (folder / f"{stem}.{language}.srt").write_text(
+                    "1\n00:00:01,000 --> 00:00:02,000\nDialogue\n"
+                )
+        self.app.folder_path.set(str(folder))
+        self.app.folder_source, self.app.folder_reference = "pt", "en"
+        self.app.automatic_initial.set("1")
+        self.app.final_offset_ms.set("-500")
+        modes = []
+
+        def choose(source, reference):
+            left = tuple(self.gui.subtitle_alignment.read_srt(source))
+            right = tuple(self.gui.subtitle_alignment.read_srt(reference))
+            return SyncSelection(left, right, 1, 1, input_signatures((str(source), str(reference))))
+
+        def worker(*args, **kwargs):
+            self.assertEqual(str(self.app.automatic_initial_checkbox["state"]), "normal")
+            modes.append(kwargs["automatic_initial"])
+            self.assertEqual(kwargs["selection"] is None, kwargs["automatic_initial"])
+            self.assertEqual(kwargs["final_offset_ms"], -500)
+            self.app.automatic_initial_checkbox.invoke()
+            kwargs["events"].put(("success", (args[3], 1, {})))
+
+        with (
+            patch.object(self.gui.threading, "Thread", side_effect=lambda **kwargs: Mock(start=kwargs["target"])),
+            patch.object(self.root, "after"),
+            patch.object(self.gui.subtitle_alignment, "validate_processing_device"),
+            patch.object(self.app, "_request_folder_selection", side_effect=choose) as picker,
+            patch.object(self.app, "_sync_worker", side_effect=worker),
+        ):
+            self.app._start_sync()
+        self.assertEqual(modes, [True, False, True])
+        self.assertEqual(picker.call_count, 1)
+        self.app.batch_running = False
+        self.app._finish()
+
+    def test_final_offset_delays_or_advances_saved_output_and_report(self):
+        source = Path(self.temporary.name) / "source.srt"
+        source.write_bytes(b"\xef\xbb\xbf1\r\n00:00:01,000 --> 00:00:02,000\r\nDialogue\r\n")
+        output = source.with_suffix(".synced.srt")
+        for offset, expected in ((500, "00:00:02,500"), (-500, "00:00:01,500"), (0, "00:00:02,000")):
+            with (
+                self.subTest(offset=offset),
+                patch.object(self.gui.subtitle_alignment, "analyze_subtitles", return_value=(
+                    [(1, 1.)], {"matched_cues": 1},
+                )),
+                patch.object(self.gui, "write_report") as report,
+            ):
+                self.app._sync_worker(
+                    None, source, source, output, 0, 70, final_offset_ms=offset, generate_report=True,
+                )
+                result = self.app.messages.get_nowait()
+                while result[0] != "success":
+                    self.assertNotEqual(result[0], "error", result)
+                    result = self.app.messages.get_nowait()
+                self.assertTrue(output.read_bytes().startswith(b"\xef\xbb\xbf"))
+                self.assertIn(expected, output.read_text(encoding="utf-8-sig"))
+                self.assertEqual(report.call_args.kwargs["settings"]["Final offset (ms)"], offset)
+                self.assertIn(expected, report.call_args.kwargs["synchronized"])
+
+    def test_final_offset_rejects_invalid_input_and_negative_result_without_overwriting(self):
+        for value in ("", "1.5", "abc", "--500"):
+            self.app.final_offset_ms.set(value)
+            with self.assertRaises(ValueError):
+                self.app._read_final_offset()
+        for value, expected in (("+500", 500), (" -500 ", -500), ("0", 0)):
+            self.app.final_offset_ms.set(value)
+            self.assertEqual(self.app._read_final_offset(), expected)
+        source = Path(self.temporary.name) / "source.srt"
+        source.write_text("1\n00:00:01,000 --> 00:00:02,000\nDialogue\n")
+        output = source.with_suffix(".synced.srt")
+        output.write_text("existing output")
+        with patch.object(self.gui.subtitle_alignment, "analyze_subtitles", return_value=(
+            [(1, 0.)], {"matched_cues": 1},
+        )):
+            self.app._sync_worker(None, source, source, output, 0, 70, final_offset_ms=-1500)
+        self.assertEqual(list(self.app.messages.queue)[-1][0], "error")
+        self.assertEqual(output.read_text(), "existing output")
+
+    def test_worker_applies_timing_scale_from_local_or_private_gpu_analysis_and_reports_it(self):
+        from sync_report import report_path
+
+        source = Path(self.temporary.name) / "source.srt"
+        source.write_text("1\n00:00:10,000 --> 00:00:12,000\nDialogue\n")
+        output = source.with_suffix(".synced.srt")
+        diagnostics = {
+            "matched_cues": 1, "timing_scale": 1.25, "timing_scale_applied": 1,
+            "timing_scale_matches": 20, "timing_scale_validation_error_ms": 50,
+        }
+        for private_gpu in (False, True):
+            events = self.gui.queue.Queue()
+            with (
+                self.subTest(private_gpu=private_gpu),
+                patch.object(self.gui.subtitle_alignment, "analyze_subtitles", return_value=(
+                    [(1, 2.5)], diagnostics,
+                )),
+                patch.object(self.gui.gpu_runtime, "runtime_ready", return_value=private_gpu),
+                patch.object(self.gui.gpu_runtime, "run_worker", return_value={
+                    "anchors": [[1, 2.5]], "diagnostics": diagnostics,
+                }) as worker,
+            ):
+                self.app._sync_worker(
+                    None, source, source, output, 0, 70,
+                    processing_device="NVIDIA" if private_gpu else "CPU",
+                    generate_report=True, final_offset_ms=500,
+                    events=events if private_gpu else None,
+                )
+                self.assertEqual(worker.called, private_gpu)
+            messages = list((events if private_gpu else self.app.messages).queue)
+            self.assertEqual(messages[-1][0], "success", messages[-1])
+            self.assertIn("00:00:13,000 --> 00:00:15,500", output.read_text())
+            report = report_path(output).read_text()
+            self.assertIn("timing_scale: 1.25", report)
+            self.assertIn("timing_scale_validation_error_ms: 50", report)
+            self.assertIn("Final offset (ms): 500", report)
+            output.unlink()
+
+    def test_folder_manual_popup_close_cancels_remaining_files_without_analysis(self):
+        folder = Path(self.temporary.name)
+        for name in ("A.pt.srt", "A.en.srt", "B.pt.srt", "B.en.srt"):
+            (folder / name).write_text("1\n00:00:01,000 --> 00:00:02,000\nDialogue\n")
+        self.app.folder_path.set(str(folder))
+        self.app.folder_source, self.app.folder_reference = "pt", "en"
+        put = self.app.messages.put
+
+        def message(item):
+            if item[0] == "folder_select_pair":
+                self.app._show_folder_pair_picker(*item[1])
+                self.app.folder_pair_dialog.window.destroy()
+            else:
+                put(item)
+
+        with (
+            patch.object(self.gui.threading, "Thread", side_effect=lambda **kwargs: Mock(start=kwargs["target"])),
+            patch.object(self.root, "after"),
+            patch.object(self.gui.subtitle_alignment, "validate_processing_device"),
+            patch.object(self.app.messages, "put", side_effect=message),
+            patch.object(self.app, "_sync_worker") as worker,
+        ):
+            self.app._start_sync()
+        worker.assert_not_called()
+        rows = list(self.app.messages.queue)[-1][1]
+        self.assertEqual([row[1] for row in rows], ["Cancelled", "Cancelled"])
+        self.assertFalse((folder / "A.pt.synced.srt").exists())
+        self.app.batch_running = False
+        self.app._finish()
+
+    def test_folder_cancellation_closes_picker_before_batch_completion_resets_cancel_flag(self):
+        source = Path(self.temporary.name) / "A.pt.srt"
+        reference = source.with_name("A.en.srt")
+        cues = (Cue(1000, 2000, "Dialogue"),)
+        response = self.gui.queue.Queue()
+        self.app.busy = self.app.batch_running = True
+        self.app._show_folder_pair_picker(source, reference, cues, cues, (), response)
+        window = self.app.folder_pair_dialog.window
+        self.app._cancel_sync()
+        self.app.messages.put(("batch_complete", []))
+        with patch.object(self.app, "_show_folder_report"):
+            self.app._poll_worker()
+        self.assertFalse(window.winfo_exists())
+        self.assertIsNone(response.get_nowait())
+        self.assertFalse(self.app.busy)
+        self.assertIsNone(self.app.folder_pair_dialog)
+
     def test_folder_cancellation_marks_remaining_files_and_does_not_run_next_worker(self):
         folder = Path(self.temporary.name)
         for name in ("A.pt.srt", "A.en.srt", "B.pt.srt", "B.en.srt"):
             (folder / name).write_text("1\n00:00:01,000 --> 00:00:02,000\nDialogue\n")
         self.app.folder_path.set(str(folder))
         self.app.folder_source, self.app.folder_reference = "pt", "en"
+        self.app.automatic_initial.set("1")
 
         def cancel(*args, **kwargs):
             self.app.sync_cancel.set()
@@ -541,6 +761,7 @@ class InterfaceTests(unittest.TestCase):
             (folder / name).write_text("1\n00:00:01,000 --> 00:00:02,000\nDialogue\n")
         self.app.folder_path.set(str(folder))
         self.app.folder_source, self.app.folder_reference = "pt", "en"
+        self.app.automatic_initial.set("1")
         with (
             patch.object(self.gui.threading, "Thread", side_effect=lambda **kwargs: Mock(start=kwargs["target"])),
             patch.object(self.root, "after"),
@@ -619,7 +840,7 @@ class InterfaceTests(unittest.TestCase):
         self.app.report_checkbox.invoke()
         self.assertEqual(self.app.report_enabled.get(), "1")
         self.change("pt", "dark")
-        self.assertEqual(report["text"], "Relatório")
+        self.assertEqual(report["text"], "Relatório e extras")
         self.assertEqual(self.app.report_checkbox["text"], "Gerar relatório de sincronização")
         self.root.deiconify()
         self.root.update()
@@ -634,6 +855,18 @@ class InterfaceTests(unittest.TestCase):
         with patch.object(self.gui, "AudioSyncDialog") as dialog, patch.object(self.root, "wait_window"):
             self.app._open_audio_sync()
         self.assertTrue(dialog.call_args.kwargs["generate_report"])
+
+    def test_offset_controls_do_not_increase_report_box_height(self):
+        self.root.update_idletasks()
+        height = self.app.report_group.winfo_reqheight()
+        offset_box = self.app.final_offset_entry.master
+        offset_box.grid_remove()
+        self.root.update_idletasks()
+        self.assertEqual(self.app.report_group.winfo_reqheight(), height)
+        offset_box.grid()
+        self.assertLessEqual(int(self.app.device_selector["width"]), 16)
+        self.assertLessEqual(int(self.app.backend_selector["width"]), 16)
+        self.assertEqual(self.app.final_offset_ms.get(), "0")
 
     def test_reference_sync_report_is_opt_in_and_report_failure_does_not_undo_srt(self):
         from sync_report import report_path
@@ -838,7 +1071,7 @@ class InterfaceTests(unittest.TestCase):
         self.assertTrue(thread.call_args.kwargs["kwargs"]["automatic_initial"])
         self.app._finish()
 
-    def test_automatic_audio_pass_uses_aligned_source_and_commits_only_after_both_stages(self):
+    def test_automatic_audio_pass_uses_aligned_source_and_applies_final_offset_after_both_stages(self):
         from sync_report import report_path
 
         source = Path(self.temporary.name) / "episode.pt.srt"
@@ -867,10 +1100,11 @@ class InterfaceTests(unittest.TestCase):
         ):
             self.app._sync_worker(
                 video, source, source, output, 1000, 70, sync_to_audio=True, generate_report=True,
+                final_offset_ms=500,
             )
-        self.assertIn("00:00:03,000", output.read_text())
+        self.assertIn("00:00:03,500", output.read_text())
         self.assertEqual(source.read_text(), original)
-        self.assertIn("start shift +2000 ms", report_path(output).read_text())
+        self.assertIn("start shift +2500 ms", report_path(output).read_text())
         self.assertIn("first audio track", report_path(output).read_text())
         self.assertFalse(list(output.parent.glob(".subtitle-sync-*")))
 

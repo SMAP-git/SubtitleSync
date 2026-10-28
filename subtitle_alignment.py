@@ -381,11 +381,11 @@ def _model_cache() -> Path:
     return cache
 
 
-def _automatic_initial_pair(
+def _global_dialogue_matches(
     source: Sequence[Cue], reference: Sequence[Cue],
     vectors: dict[str, np.ndarray], strictness: int,
     notify: Callable[[str], None],
-) -> tuple[int, int]:
+) -> list[tuple[int, int, int, float]]:
     def usable(cues: Sequence[Cue]) -> list[tuple[int, Cue]]:
         return [
             (index + 1, cue) for index, cue in enumerate(cues)
@@ -396,22 +396,131 @@ def _automatic_initial_pair(
 
     left, right = usable(source), usable(reference)
     if len(left) < 3 or len(right) < 3:
-        raise ValueError("Cannot confidently find an automatic initial sync point. Select matching cues manually.")
+        return []
     # Bound the search memory and sample across the timeline, not just opening credits.
     sampled = np.linspace(0, len(left) - 1, min(256, len(left)), dtype=int)
     reference_vectors = np.asarray([vectors[_clean_caption(cue.text)] for _, cue in right])
+    source_vectors = np.asarray([vectors[_clean_caption(cue.text)] for _, cue in left])
     matches: list[tuple[int, int, int, float]] = []
     for position in sampled:
         number, cue = left[int(position)]
-        notify(f"Finding automatic initial sync point: source cue {number}...")
+        notify(f"Checking global timing matches: source cue {number}...")
         scores = reference_vectors @ vectors[_clean_caption(cue.text)]
         best = int(np.argmax(scores))
         alternatives = np.delete(scores, best)
         score = float(scores[best])
         if score < 0.68 or score - float(np.max(alternatives)) < 0.08:
             continue
+        reverse = source_vectors @ reference_vectors[best]
+        if (int(np.argmax(reverse)) != int(position)
+                or score - float(np.max(np.delete(reverse, int(position)))) < 0.08):
+            continue
         reference_number, other = right[best]
         matches.append((number, reference_number, other.start_ms - cue.start_ms, score))
+    return matches
+
+
+@dataclass(frozen=True)
+class TimingEstimate:
+    scale: float
+    offset_ms: float
+    matches: tuple[tuple[int, int, int, float], ...]
+    validation_error_ms: float
+
+
+def _estimate_timing_scale(
+    source: Sequence[Cue], matches: Sequence[tuple[int, int, int, float]],
+    anchor: tuple[int, int] | None = None,
+    progress: Callable[[str], None] | None = None,
+) -> TimingEstimate | None:
+    """Fit on alternating matches and verify against independently held-out matches."""
+    if len(matches) < 10:
+        return None
+    x = np.asarray([source[item[0] - 1].start_ms for item in matches], dtype=np.float64)
+    y = x + np.asarray([item[2] for item in matches], dtype=np.float64)
+    dialogue = [cue for cue in source if not CREDIT.search(_clean_caption(cue.text))]
+    beginning = min(cue.start_ms for cue in dialogue)
+    span = max(cue.start_ms for cue in dialogue) - beginning
+    minimum_span = max(60_000, span * 0.6)
+    if float(np.ptp(x)) < minimum_span:
+        return None
+    train_x, train_y = x[::2], y[::2]
+    tolerance = 1500
+    best_mask = np.zeros(len(train_x), dtype=bool)
+    best_error = float("inf")
+    # At most 64 fitting points keep the deterministic consensus search bounded.
+    sampled = np.linspace(0, len(train_x) - 1, min(64, len(train_x)), dtype=int)
+    for position, left in enumerate(sampled):
+        if progress is not None:
+            progress(f"Estimating timing scale: hypothesis group {position + 1}/{len(sampled)}...")
+        for right in sampled[position + 1:]:
+            distance = train_x[right] - train_x[left]
+            if distance < minimum_span / 2:
+                continue
+            scale = (train_y[right] - train_y[left]) / distance
+            if scale <= 0:
+                continue
+            offset = train_y[left] - scale * train_x[left]
+            errors = np.abs(train_y - (scale * train_x + offset))
+            mask = errors <= tolerance
+            error = float(np.median(errors[mask]))
+            if (int(mask.sum()), -error) > (int(best_mask.sum()), -best_error):
+                best_mask, best_error = mask, error
+    if int(best_mask.sum()) < max(4, len(train_x) * 0.8):
+        return None
+    fit_x, fit_y = train_x[best_mask], train_y[best_mask]
+    if anchor is None:
+        center_x, center_y = float(np.mean(fit_x)), float(np.mean(fit_y))
+    else:
+        center_x, center_y = anchor
+    dx = fit_x - center_x
+    denominator = float(dx @ dx)
+    if denominator <= 0:
+        return None
+    scale = float(dx @ (fit_y - center_y)) / denominator
+    offset = center_y - scale * center_x
+    if scale <= 0:
+        return None
+    errors = np.abs(y - (scale * x + offset))
+    residuals = y - (scale * x + offset)
+    inliers = errors <= tolerance
+    validation = errors[1::2]
+    if (int(inliers.sum()) < len(matches) * 0.8
+            or int((validation <= tolerance).sum()) < max(4, len(validation) * 0.8)
+            or float(np.ptp(x[inliers])) < minimum_span):
+        return None
+    for index in range(1, len(matches)):
+        if (not inliers[index - 1] and not inliers[index]
+                and x[index] - x[index - 1] >= 10000
+                and min(errors[index - 1], errors[index]) > tolerance * 3
+                and residuals[index] * residuals[index - 1] > 0):
+            # A coherent unmatched section may be an edit, not isolated bad dialogue matches.
+            return None
+    support = tuple(item for item, keep in zip(matches, inliers) if keep)
+    if any(
+        source[b[0] - 1].start_ms <= source[a[0] - 1].start_ms or b[1] <= a[1]
+        for a, b in zip(support, support[1:])
+    ):
+        return None
+    # Require evidence in each third, not just a dense cluster within one scene.
+    thirds = np.minimum(2, ((x - beginning) * 3 / span).astype(int))
+    for part in range(3):
+        if int(inliers[thirds == part].sum()) < 2:
+            return None
+    # Tiny fitted rate differences are indistinguishable from cue-boundary noise.
+    if abs(scale - 1) * span < 2000:
+        return None
+    return TimingEstimate(scale, offset, support, float(np.percentile(validation, 80)))
+
+
+def _automatic_initial_pair(
+    source: Sequence[Cue], reference: Sequence[Cue],
+    vectors: dict[str, np.ndarray], strictness: int,
+    notify: Callable[[str], None],
+    matches: Sequence[tuple[int, int, int, float]] | None = None,
+) -> tuple[int, int]:
+    if matches is None:
+        matches = _global_dialogue_matches(source, reference, vectors, strictness, notify)
     groups = [
         [other for other in matches if abs(other[2] - match[2]) <= 3000]
         for match in matches
@@ -512,12 +621,37 @@ def analyze_subtitles(
         raise ValueError("The embedding backend returned empty dialogue vectors.")
     vectors /= norms
     by_text = dict(zip(texts, vectors))
+    global_matches = _global_dialogue_matches(
+        source, reference, by_text, hearing_impaired_strictness, notify,
+    )
+    timing = _estimate_timing_scale(
+        source, global_matches,
+        None if automatic_initial else (source[source_anchor - 1].start_ms, anchor_time),
+        notify,
+    )
     if automatic_initial:
-        source_anchor, reference_anchor = _automatic_initial_pair(
-            source, reference, by_text, hearing_impaired_strictness, notify,
-        )
+        if timing is not None:
+            selected = min(timing.matches, key=lambda item: abs(
+                source[item[0] - 1].start_ms + item[2]
+                - (timing.scale * source[item[0] - 1].start_ms + timing.offset_ms)
+            ))
+            source_anchor, reference_anchor = selected[:2]
+            notify(f"Automatic initial sync point: source cue {source_anchor}, "
+                   f"reference cue {reference_anchor}; {len(timing.matches)} scale-consistent matches.")
+        else:
+            source_anchor, reference_anchor = _automatic_initial_pair(
+                source, reference, by_text, hearing_impaired_strictness, notify, global_matches,
+            )
         anchor_time = reference[reference_anchor - 1].start_ms
         initial_offset_ms = anchor_time - source[source_anchor - 1].start_ms
+    timing_scale = timing.scale if timing is not None else 1.0
+    scale_offset = anchor_time - timing_scale * source[source_anchor - 1].start_ms
+    if timing is not None:
+        notify(f"Timing scale accepted: {timing_scale:.9f}; {len(timing.matches)} supporting matches; "
+               f"held-out 80th-percentile error {timing.validation_error_ms:.0f} ms. "
+               "Review the beginning, middle and end.")
+    else:
+        notify("No confident global timing scale detected; retaining local offset-based alignment.")
     source_vectors = np.asarray([by_text[text] for text in source_texts])
     reference_vectors = np.asarray([by_text[text] for text in reference_texts])
     source_context_vectors = np.asarray([by_text[text] for text in source_contexts])
@@ -539,7 +673,7 @@ def analyze_subtitles(
         if not source_indices or _alnum_length(clean_text) < 2 or CREDIT.search(clean_text):
             continue
 
-        expected = cue.start_ms + initial_offset_ms
+        expected = cue.start_ms * timing_scale + scale_offset
         distances = np.abs(starts - expected)
         radius = min(
             70_000,
@@ -602,7 +736,7 @@ def analyze_subtitles(
     if not monotonic:
         raise ValueError("The matched dialogue did not produce a usable sync timeline.")
 
-    # A short local median suppresses isolated bad matches while retaining gradual drift.
+    # Smooth residual shifts, not the global rate trend, to avoid flattening drift at the ends.
     smoothed: list[tuple[int, int, float]] = []
     half_window = 1
     for index, match in enumerate(monotonic):
@@ -611,12 +745,13 @@ def analyze_subtitles(
             if (other.cue_number < source_anchor) == (match.cue_number < source_anchor)
         ]
         offsets = [
-            other.target_ms - source[other.cue_number - 1].start_ms
+            other.target_ms - source[other.cue_number - 1].start_ms * timing_scale
             for other in nearby
         ]
         offset_ms = int(np.median(np.asarray(offsets, dtype=np.int64)))
         cue = source[match.cue_number - 1]
-        smoothed.append((match.cue_number, cue.start_ms + offset_ms, offset_ms / 1000))
+        target_ms = round(cue.start_ms * timing_scale) + offset_ms
+        smoothed.append((match.cue_number, target_ms, (target_ms - cue.start_ms) / 1000))
 
     initial_offset = initial_offset_ms / 1000
     anchors: list[tuple[int, float]] = []
@@ -635,8 +770,11 @@ def analyze_subtitles(
     final_offset = anchors[-1][1]
     for cue_number, cue in reversed(list(enumerate(source, start=1))):
         if CREDIT.search(_clean_caption(cue.text)):
-            if cue_number > anchors[-1][0] and cue.start_ms + round(final_offset * 1000) > last_video_time:
-                anchors.append((cue_number, final_offset))
+            credit_offset = final_offset + (
+                (cue.start_ms - source[anchors[-1][0] - 1].start_ms) * (timing_scale - 1) / 1000
+            )
+            if cue_number > anchors[-1][0] and cue.start_ms + round(credit_offset * 1000) > last_video_time:
+                anchors.append((cue_number, credit_offset))
             break
 
     anchors.sort(key=lambda item: item[0])
@@ -659,5 +797,13 @@ def analyze_subtitles(
         "anchor_time_ms": anchor_time,
         "reference_anchor": reference_anchor if reference_anchor is not None else 0,
         "automatic_initial": int(automatic_initial),
+        "timing_scale": timing_scale,
+        "timing_scale_applied": int(timing is not None),
+        "timing_scale_matches": len(timing.matches) if timing is not None else 0,
+        "timing_scale_candidates": len(global_matches),
+        "timing_scale_support_percent": (
+            round(100 * len(timing.matches) / len(global_matches)) if timing is not None else 0
+        ),
+        "timing_scale_validation_error_ms": timing.validation_error_ms if timing is not None else 0,
     }
     return anchors, diagnostics

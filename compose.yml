@@ -1,6 +1,6 @@
 services:
   subtitle-sync:
-    image: subtitle-sync:1.1.0
+    image: subtitle-sync:1.1.1
     build:
       context: .
       platforms:

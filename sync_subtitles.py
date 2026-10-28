@@ -87,6 +87,21 @@ def ms_to_timestamp(value: int) -> str:
     return f"{hours:02d}:{minutes:02d}:{seconds:02d},{milliseconds:03d}"
 
 
+def shift_srt(text: str, offset_ms: int) -> str:
+    """Apply an exact uniform shift without clipping cues at zero."""
+    def replace(match: re.Match[str]) -> str:
+        start = timestamp_to_ms(match["start"]) + offset_ms
+        end = timestamp_to_ms(match["end"]) + offset_ms
+        if start < 0 or end <= start:
+            raise ValueError(
+                "Final offset would produce a negative timestamp or invalid cue duration. "
+                "Reduce the advance. No output was saved."
+            )
+        return ms_to_timestamp(start) + match["arrow"] + ms_to_timestamp(end)
+
+    return TIMESTAMP.sub(replace, text)
+
+
 def parse_anchors(path: Path, cue_count: int) -> list[tuple[int, float]]:
     try:
         raw: Any = json.loads(path.read_text(encoding="utf-8-sig"))
@@ -134,7 +149,11 @@ def interpolate_offset(
     return left_offset + fraction * (right_offset - left_offset)
 
 
-def sync_srt(text: str, anchors: list[tuple[int, float]]) -> tuple[str, int]:
+def sync_srt(
+    text: str, anchors: list[tuple[int, float]], *, timing_scale: float = 1.0,
+) -> tuple[str, int]:
+    if not math.isfinite(timing_scale) or timing_scale <= 0:
+        raise ValueError("Timing scale must be finite and positive.")
     timestamp_matches = list(TIMESTAMP.finditer(text))
     cue_times = [timestamp_to_ms(match.group("start")) for match in timestamp_matches]
     if not cue_times:
@@ -180,6 +199,15 @@ def sync_srt(text: str, anchors: list[tuple[int, float]]) -> tuple[str, int]:
         original_start_ms = start_ms
         original_end_ms = end_ms
         offset_ms = round(interpolate_offset(start_ms, time_anchors) * 1000)
+        if timing_scale != 1.0:
+            if start_ms < time_anchors[0][0]:
+                offset_ms += round((start_ms - time_anchors[0][0]) * (timing_scale - 1))
+            elif start_ms > time_anchors[-1][0]:
+                offset_ms += round((start_ms - time_anchors[-1][0]) * (timing_scale - 1))
+        scaled_duration = max(1, round((end_ms - start_ms) * timing_scale))
+        if timing_scale != 1.0 and (start_ms + offset_ms < 0 or end_ms <= start_ms):
+            raise ValueError("Timing scale would produce negative timestamps or invalid cue duration.")
+        end_ms = start_ms + scaled_duration if timing_scale != 1.0 else end_ms
         new_start = ms_to_timestamp(start_ms + offset_ms)
         new_end = ms_to_timestamp(end_ms + offset_ms)
         cue_timings.append(

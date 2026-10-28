@@ -7,28 +7,30 @@ Original source and reference subtitles are kept unchanged.
 
 ![SubSync v1.1.0 application window](docs/images/subsync-v1.1.0.png)
 
-## Downloads (v1.1.0)
+## Published downloads (v1.1.1)
 
-- [Windows x64 portable package](https://github.com/SMAP-git/SubtitleSync/releases/download/v1.1.0/SubtitleSync-1.1.0-windows-x64.zip)
-- [Linux x64 portable package](https://github.com/SMAP-git/SubtitleSync/releases/download/v1.1.0/SubtitleSync-1.1.0-linux-x64.tar.gz)
-- [CPU-only Docker image](https://github.com/SMAP-git/SubtitleSync/releases/download/v1.1.0/SubtitleSync-1.1.0-docker-amd64-cpu.tar.gz)
-- [CPU Docker image SHA-256](https://github.com/SMAP-git/SubtitleSync/releases/download/v1.1.0/SubtitleSync-1.1.0-docker-amd64-cpu.tar.gz.sha256)
-- [Windows/Linux portable SHA-256 sums](https://github.com/SMAP-git/SubtitleSync/releases/download/v1.1.0/SHA256SUMS.txt)
-- [GPU Docker image SHA-256](https://github.com/SMAP-git/SubtitleSync/releases/download/v1.1.0/SubtitleSync-1.1.0-docker-amd64.tar.gz.sha256)
-- [GPU Docker parts SHA-256 sums](https://github.com/SMAP-git/SubtitleSync/releases/download/v1.1.0/SubtitleSync-1.1.0-docker-amd64.parts.sha256)
+- [Windows x64 portable package](https://github.com/SMAP-git/SubtitleSync/releases/download/v1.1.1/SubtitleSync-1.1.1-windows-x64.zip)
+- [Linux x64 portable package](https://github.com/SMAP-git/SubtitleSync/releases/download/v1.1.1/SubtitleSync-1.1.1-linux-x64.tar.gz)
+- [Windows/Linux portable SHA-256 sums](https://github.com/SMAP-git/SubtitleSync/releases/download/v1.1.1/SHA256SUMS.txt)
+- [GPU Docker image SHA-256](https://github.com/SMAP-git/SubtitleSync/releases/download/v1.1.1/SubtitleSync-1.1.1-docker-amd64.tar.gz.sha256)
+- [GPU Docker parts SHA-256 sums](https://github.com/SMAP-git/SubtitleSync/releases/download/v1.1.1/SubtitleSync-1.1.1-docker-amd64.parts.sha256)
+
+The v1.1.1 release does not include a prebuilt CPU-only Docker image; build
+`subtitle-sync:1.1.1-cpu` locally as described in the Docker section, or use the
+full GPU image, which also runs on CPU.
 
 The full GPU Docker image is split into two release assets because of its size.
-Download [part 1](https://github.com/SMAP-git/SubtitleSync/releases/download/v1.1.0/SubtitleSync-1.1.0-docker-amd64.tar.gz.part01)
-and [part 2](https://github.com/SMAP-git/SubtitleSync/releases/download/v1.1.0/SubtitleSync-1.1.0-docker-amd64.tar.gz.part02),
+Download [part 1](https://github.com/SMAP-git/SubtitleSync/releases/download/v1.1.1/SubtitleSync-1.1.1-docker-amd64.tar.gz.part01)
+and [part 2](https://github.com/SMAP-git/SubtitleSync/releases/download/v1.1.1/SubtitleSync-1.1.1-docker-amd64.tar.gz.part02),
 then verify the parts and reassemble the image:
 
 ```sh
-sha256sum --check SubtitleSync-1.1.0-docker-amd64.parts.sha256
-cat SubtitleSync-1.1.0-docker-amd64.tar.gz.part01 \
-    SubtitleSync-1.1.0-docker-amd64.tar.gz.part02 \
-    > SubtitleSync-1.1.0-docker-amd64.tar.gz
-sha256sum --check SubtitleSync-1.1.0-docker-amd64.tar.gz.sha256
-gzip -dc SubtitleSync-1.1.0-docker-amd64.tar.gz | docker load
+sha256sum --check SubtitleSync-1.1.1-docker-amd64.parts.sha256
+cat SubtitleSync-1.1.1-docker-amd64.tar.gz.part01 \
+    SubtitleSync-1.1.1-docker-amd64.tar.gz.part02 \
+    > SubtitleSync-1.1.1-docker-amd64.tar.gz
+sha256sum --check SubtitleSync-1.1.1-docker-amd64.tar.gz.sha256
+gzip -dc SubtitleSync-1.1.1-docker-amd64.tar.gz | docker load
 ```
 
 ## Top bar and interface settings
@@ -44,7 +46,7 @@ The top bar shows the app name on the left. On the right are **Sync to audio**,
 **Analyze and synchronize**, **Cancel**, the **gear menu** and the **version badge**, in that
 order. Sync to audio uses the same secondary colors as Speech to text in every
 theme. The secondary speech button and primary synchronization button follow the
-reference app's light/dark banner colors. The current Subtitle Sync version is **v1.1.0**.
+reference app's light/dark banner colors. The current Subtitle Sync version is **v1.1.1**.
 The gear dropdown is right-aligned with its button; its submenus open to the left
 when the window is at the right screen edge, including when maximized.
 **Cancel** sits between Analyze and synchronize and the gear, with the same
@@ -88,7 +90,7 @@ hardware or driver configuration changes.
 
 ### Optional synchronization report
 
-The **Report** box, to the right of **Processing device**, has a **Generate sync
+The **Report and extra** box, to the right of **Processing device**, has a **Generate sync
 report** checkbox (off by default). Enable it before synchronizing or opening
 **Sync to audio...** to save a UTF-8 text report beside the resulting SRT.
 For example, `Episode.pt.synced.srt` or `Episode.pt.audio-synced.srt` produces
@@ -119,6 +121,15 @@ Out-of-order download/translation credits are excluded from dialogue matching
 without removing them or reordering the original subtitle file. Out-of-order
 dialogue still requires correction.
 
+**Final offset (ms)** applies a uniform shift to every cue after **Analyze and
+synchronize**, including after the optional audio pass. Enter a whole number:
+`500` or `+500` delays subtitles by half a second; `-500` advances them.
+The default is `0` (no shift). This session-only setting also applies to all files
+in SRT folder mode, but not to the separate audio-only workflows. Cue durations,
+text and formatting are preserved. An advance that would create negative
+timestamps is rejected without replacing the output. Reports include the offset
+and final timings.
+
 ### Automatic initial sync point
 
 Enable **Automatically select initial sync point** in the **Initial sync point**
@@ -137,6 +148,48 @@ there is more than one. Uncertain, ambiguous or insufficient matches stop the
 operation without replacing the output. Uncheck the option and select matching
 cues manually to proceed. Automatic selection is not a guarantee of accuracy:
 always review the result, especially across different edits of the video.
+
+### Automatic timing-scale detection
+
+**Analyze and synchronize** automatically checks for a uniform timing-rate
+difference before detailed matching, with either a manually selected initial
+pair or automatic initial-point selection. This also applies to each pair in SRT
+folder mode and uses the same embeddings on all supported processing backends.
+No FPS selection or additional model download is required.
+
+The preliminary search compares distinctive dialogue across the whole timeline,
+without the local matching window. It estimates
+`reference time = source time * scale + offset`, rejecting ambiguous or repeated
+dialogue. The fit uses alternating matches and is checked against the held-out
+matches, not just the points used to fit it. Acceptance requires at least ten
+global matches, at least 80% agreement within 1.5 seconds, and supporting dialogue
+spread across at least 60% of the source timeline and at least one minute.
+Consecutive, same-direction timing deviations exceeding 4.5 seconds are treated
+as evidence of different edits rather than a uniform rate change. Smaller
+cue-boundary deviations do not by themselves trigger this section-cut veto;
+the fit must still pass the 80% agreement and independent validation checks.
+Tiny rate differences accumulating less than two
+seconds across the source timeline are not applied.
+
+An accepted scale guides the existing local dialogue matching so accumulated
+drift does not push the correct dialogue outside the search window. Manual sync
+pairs remain exact. Local corrections are still used for cue-level differences.
+Both cue starts and durations are retimed; the scale also extends beyond the
+first and last matching anchors. Source text, cue order and original files are
+unchanged, and newly introduced overlaps can still shorten a cue.
+When no reliable scale is found, the processing log explicitly says that local
+offset-based alignment is retained; uncertain automatic initial-point selection
+still fails rather than guessing.
+
+The log and optional report record the accepted scale, supporting match count
+and held-out timing error. Reports also include candidate count and support
+percentage; these are evidence for the fit, not a guarantee of timing accuracy.
+SRT timestamps do not identify an original FPS, so the app reports a measured
+timing scale rather than claiming a specific FPS conversion. Speed differences
+can be corrected in either direction. Different video edits, malformed timestamps
+and missing dialogue are not reliably repaired by a global scale: always review
+the beginning, middle and end. Optional audio synchronization follows reference
+retiming; **Final offset (ms)** is applied last.
 
 ### Folder mode
 
@@ -158,7 +211,16 @@ Subtitles are paired by the same filename/title before the language suffix.
 Generated `.synced.srt` and `.audio-synced.srt` files are not used as new inputs.
 Unrecognized suffixes are not guessed.
 
-Folder mode requires and automatically enables automatic initial sync selection.
+Folder mode uses the **Automatically select initial sync point** setting.
+Leave it enabled for unattended processing. When disabled, a cue-pair popup opens
+before analysis of each eligible source/reference pair. Select the same dialogue
+moment in both files and confirm to process that file, then repeat for the next
+pair. The popup title identifies both files. Cancelling or closing the popup
+cancels the remaining batch; completed outputs are retained. Files with existing
+outputs or invalid/missing pairs are skipped or reported without a popup.
+You can toggle automatic initial-point selection while a folder batch is running.
+Each file uses the setting at the start of its processing; changing it does not
+interrupt the current analysis or close a cue-pair popup already open.
 Click **Analyze and synchronize** to process every source file in the selected
 language. Each output is saved next to its source as `Episode.pt.synced.srt`.
 Existing outputs are skipped, not overwritten. Missing references, ambiguous
@@ -461,8 +523,8 @@ new image, built with revised dependency pins. This feature does not change
 
 ### CPU-only image (recommended small download)
 
-For CPU users, choose `subtitle-sync:1.1.0-cpu`; for GPU users choose the full
-`subtitle-sync:1.1.0` image. The earlier slim variant is discontinued.
+For CPU users, build `subtitle-sync:1.1.1-cpu`; for GPU users build the full
+`subtitle-sync:1.1.1` image. The earlier slim variant is discontinued.
 
 CPU-only includes Python, Tkinter/browser desktop, CPU ONNX Runtime, FFmpeg and
 MKVToolNix. It excludes the optional Vulkan driver packages and NVIDIA CUDA/cuDNN
@@ -471,13 +533,13 @@ runtime installation is disabled. CPU models and the CPU Whisper executable
 still download on demand into persistent `/config`.
 
 ```sh
-docker build --platform linux/amd64 --build-arg WITH_CUDA=0 --build-arg CPU_ONLY=1 -t subtitle-sync:1.1.0-cpu .
-docker save subtitle-sync:1.1.0-cpu | gzip > SubtitleSync-1.1.0-docker-amd64-cpu.tar.gz
-gzip -dc SubtitleSync-1.1.0-docker-amd64-cpu.tar.gz | docker load
+docker build --platform linux/amd64 --build-arg WITH_CUDA=0 --build-arg CPU_ONLY=1 -t subtitle-sync:1.1.1-cpu .
+docker save subtitle-sync:1.1.1-cpu | gzip > SubtitleSync-1.1.1-docker-amd64-cpu.tar.gz
+gzip -dc SubtitleSync-1.1.1-docker-amd64-cpu.tar.gz | docker load
 ```
 
 Use [unraid/subtitle-sync-cpu.xml](unraid/subtitle-sync-cpu.xml), or change an
-existing container's Repository to `subtitle-sync:1.1.0-cpu` after loading it
+existing container's Repository to `subtitle-sync:1.1.1-cpu` after loading it
 and Apply. Remove GPU Device entries and `--gpus=all` / `--device=/dev/dri:/dev/dri`
 from Extra Parameters; retain `--shm-size=1g`. Keep existing `/config` and `/data`
 mappings. Saved GPU selections are ignored in this variant and CPU is selected.
@@ -515,8 +577,8 @@ Two images are available:
 
 | Image | NVIDIA libraries | Best for |
 |---|---|---|
-| `subtitle-sync:1.1.0` (full GPU) | Included | CPU, NVIDIA CUDA and AMD/Intel Vulkan GPU/APU users |
-| `subtitle-sync:1.1.0-cpu` | Not included; GPU disabled | CPU-only users wanting the smaller download |
+| `subtitle-sync:1.1.1` (full GPU) | Included | CPU, NVIDIA CUDA and AMD/Intel Vulkan GPU/APU users |
+| `subtitle-sync:1.1.1-cpu` | Not included; GPU disabled | CPU-only users wanting the smaller build |
 
 Both include the resizable/maximizable sortable file picker, synchronization
 Cancel button, cached-file download prompt fix, UTF-8 locale fix and single-pass Whisper
@@ -527,18 +589,18 @@ GPU use. Do not run two containers simultaneously against the same appdata.
 For the full image:
 
 ```sh
-docker build --platform linux/amd64 -t subtitle-sync:1.1.0 .
+docker build --platform linux/amd64 -t subtitle-sync:1.1.1 .
 # Optional: transfer the image to a different machine.
-docker save subtitle-sync:1.1.0 | gzip > SubtitleSync-1.1.0-docker-amd64.tar.gz
+docker save subtitle-sync:1.1.1 | gzip > SubtitleSync-1.1.1-docker-amd64.tar.gz
 ```
 
 On Unraid, load the image with
-`gzip -dc SubtitleSync-1.1.0-docker-amd64.tar.gz | docker load`.
+`gzip -dc SubtitleSync-1.1.1-docker-amd64.tar.gz | docker load`.
 Copy [unraid/subtitle-sync.xml](unraid/subtitle-sync.xml) into
 `/boot/config/plugins/dockerMan/templates-user/my-subtitle-sync.xml`, then use
 **Docker -> Add Container -> Template -> SubtitleSync**. Set your media share,
 appdata location, Web UI host port and optional GPU options before applying.
-The template refers to the **local** `subtitle-sync:1.1.0` image: it is not a
+The template refers to the **local** `subtitle-sync:1.1.1` image: it is not a
 published Docker Hub/GHCR image and cannot be pulled from a registry.
 To update it, rebuild/load the new image and recreate the container while keeping
 the same `/config` mapping; Unraid's registry update check cannot update a local image.
@@ -752,8 +814,9 @@ Whisper can mishear names, omit dialogue or hallucinate text during silence.
 Review generated text and timestamps before synchronizing. Spoken-language
 recognition coverage is broader than the matching model's language coverage;
 a selectable speech language does not guarantee reliable cross-language matching.
-Source cue durations in the final synchronized SRT are still preserved, subject
-to the existing overlap/negative-timestamp corrections.
+Source cue durations in the final synchronized SRT are preserved unless a
+confidence-checked global timing scale is applied (see Automatic timing-scale
+detection), subject to the existing overlap/negative-timestamp corrections.
 
 ## Languages and contextual matching
 
@@ -893,10 +956,10 @@ backends, select **ONNX (advanced)** explicitly:
 
 Automatic packages:
 
-- **NVIDIA Windows/Linux:** `onnxruntime-gpu[cuda,cudnn]>=1.21`, including packaged
-  CUDA/cuDNN libraries, preloaded before model initialization. This does **not**
-  include the system NVIDIA driver. Current package versions may require a very
-  recent driver or CUDA generation; follow the error output and official guide.
+- **NVIDIA Windows/Linux:** `onnxruntime-gpu[cuda,cudnn]==1.26.0` (CUDA 12; Python
+  3.10 falls back to 1.23.2), including packaged CUDA/cuDNN libraries, preloaded
+  before model initialization. This does **not** include the system NVIDIA driver;
+  CUDA 12 needs NVIDIA driver 525 or newer. Follow the error output and official guide.
 - **AMD/Intel Windows:** `onnxruntime-directml`; requires DirectX 12-compatible
   hardware and its system graphics driver. Both vendors share the DirectML environment.
 - **Intel Linux:** `onnxruntime-openvino`; requires Intel GPU drivers and device

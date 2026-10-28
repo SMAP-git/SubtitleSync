@@ -14,7 +14,7 @@ from tkinter import ttk
 
 from ui_translations import LANGUAGES, translate
 
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.1.1"
 THEMES = ("system", "light", "dark")
 
 

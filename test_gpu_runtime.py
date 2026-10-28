@@ -137,7 +137,10 @@ class GpuRuntimeTests(unittest.TestCase):
             self.assertEqual(runtime.runtime_python("AMD").name, "python.exe")
         with patch.object(runtime.sys, "platform", "linux"):
             self.assertEqual(runtime.runtime_package("INTEL"), "onnxruntime-openvino")
-            self.assertEqual(runtime.runtime_package("NVIDIA"), "onnxruntime-gpu[cuda,cudnn]==1.23.2")
+            with patch.object(runtime.sys, "version_info", (3, 12, 0)):
+                self.assertEqual(runtime.runtime_package("NVIDIA"), "onnxruntime-gpu[cuda,cudnn]==1.26.0")
+            with patch.object(runtime.sys, "version_info", (3, 10, 0)):
+                self.assertEqual(runtime.runtime_package("NVIDIA"), "onnxruntime-gpu[cuda,cudnn]==1.23.2")
             self.assertNotEqual(runtime.runtime_directory("INTEL"), runtime.runtime_directory("NVIDIA"))
             with self.assertRaisesRegex(ValueError, "ROCm/MIGraphX"):
                 runtime.runtime_package("AMD")
