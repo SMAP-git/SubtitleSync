@@ -5,7 +5,7 @@ reference SRT, in the same or a different language, or an embedded SubRip track.
 Processing is local; the first analysis downloads the multilingual model.
 Original source and reference subtitles are kept unchanged.
 
-![SubSync v1.1.1 application window](docs/images/subsync-v1.1.1.png)
+![SubSync v1.1.2 application window](docs/images/subsync-v1.1.2.png)
 
 ## Published downloads (v1.1.2)
 
